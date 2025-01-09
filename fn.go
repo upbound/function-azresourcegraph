@@ -132,12 +132,24 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 		}
 		dxr.Resource.SetAPIVersion(oxr.Resource.GetAPIVersion())
 		dxr.Resource.SetKind(oxr.Resource.GetKind())
-		TargetXRStatusField := in.Target
-		err = dxr.Resource.SetValue(TargetXRStatusField, &results.Data)
+
+		xrStatus := make(map[string]interface{})
+
+		// Update the specific status field using the reusable function
+		statusField := strings.TrimPrefix(in.Target, "status.")
+		err = SetNestedContextKey(xrStatus, statusField, results.Data)
 		if err != nil {
-			response.Fatal(rsp, errors.Wrapf(err, "cannot set field %s to %s for %s", TargetXRStatusField, results.Data, dxr.Resource.GetKind()))
+			response.Fatal(rsp, errors.Wrapf(err, "cannot set status field %s to %v", statusField, results.Data))
 			return rsp, nil
 		}
+
+		// Write the updated status field back into the composite resource
+		if err := dxr.Resource.SetValue("status", xrStatus); err != nil {
+			response.Fatal(rsp, errors.Wrap(err, "cannot write updated status back into composite resource"))
+			return rsp, nil
+		}
+
+		// Save the updated desired composite resource
 		if err := response.SetDesiredCompositeResource(rsp, dxr); err != nil {
 			response.Fatal(rsp, errors.Wrapf(err, "cannot set desired composite resource in %T", rsp))
 			return rsp, nil
@@ -247,6 +259,25 @@ func (a *AzureQuery) azQuery(ctx context.Context, azureCreds map[string]string, 
 		return armresourcegraph.ClientResourcesResponse{}, errors.Wrap(err, "failed to finish the request")
 	}
 	return results, nil
+}
+
+// ParseNestedKeys enables the bracket and dot notation to key reference
+func ParseNestedKey(key string) ([]string, error) {
+	var parts []string
+	regex := regexp.MustCompile(`\[([^\[\]]+)\]|([^.\[\]]+)`)
+	matches := regex.FindAllStringSubmatch(key, -1)
+	for _, match := range matches {
+		if match[1] != "" {
+			parts = append(parts, match[1]) // Bracket notation
+		} else if match[2] != "" {
+			parts = append(parts, match[2]) // Dot notation
+		}
+	}
+
+	if len(parts) == 0 {
+		return nil, errors.New("invalid key")
+	}
+	return parts, nil
 }
 
 // GetNestedContextKey retrieves a nested string value from a map using dot notation keys.
