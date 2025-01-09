@@ -74,20 +74,10 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 	switch {
 	case in.QueryRef == nil:
 	case strings.HasPrefix(*in.QueryRef, "status."):
-		// The composite resource that actually exists.
-		oxr, err := request.GetObservedCompositeResource(req)
+		err := getQueryFromStatus(req, in)
 		if err != nil {
-			response.Fatal(rsp, errors.Wrap(err, "cannot get observed composite resource"))
+			response.Fatal(rsp, err)
 			return rsp, nil
-		}
-		xrStatus := make(map[string]interface{})
-		err = oxr.Resource.GetValueInto("status", &xrStatus)
-		if err != nil {
-			response.Fatal(rsp, errors.Wrap(err, "cannot get XR status"))
-			return rsp, nil
-		}
-		if queryFromXRStatus, ok := GetNestedKey(xrStatus, strings.TrimPrefix(*in.QueryRef, "status.")); ok {
-			in.Query = queryFromXRStatus
 		}
 	case strings.HasPrefix(*in.QueryRef, "context."):
 		functionContext := req.GetContext().AsMap()
@@ -118,40 +108,9 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 
 	switch {
 	case strings.HasPrefix(in.Target, "status."):
-		// The composite resource that actually exists.
-		oxr, err := request.GetObservedCompositeResource(req)
+		err = putQueryResultToStatus(req, rsp, in, results)
 		if err != nil {
-			response.Fatal(rsp, errors.Wrap(err, "cannot get observed composite resource"))
-			return rsp, nil
-		}
-		// The composite resource desired by previous functions in the pipeline.
-		dxr, err := request.GetDesiredCompositeResource(req)
-		if err != nil {
-			response.Fatal(rsp, errors.Wrap(err, "cannot get desired composite resource"))
-			return rsp, nil
-		}
-		dxr.Resource.SetAPIVersion(oxr.Resource.GetAPIVersion())
-		dxr.Resource.SetKind(oxr.Resource.GetKind())
-
-		xrStatus := make(map[string]interface{})
-
-		// Update the specific status field using the reusable function
-		statusField := strings.TrimPrefix(in.Target, "status.")
-		err = SetNestedKey(xrStatus, statusField, results.Data)
-		if err != nil {
-			response.Fatal(rsp, errors.Wrapf(err, "cannot set status field %s to %v", statusField, results.Data))
-			return rsp, nil
-		}
-
-		// Write the updated status field back into the composite resource
-		if err := dxr.Resource.SetValue("status", xrStatus); err != nil {
-			response.Fatal(rsp, errors.Wrap(err, "cannot write updated status back into composite resource"))
-			return rsp, nil
-		}
-
-		// Save the updated desired composite resource
-		if err := response.SetDesiredCompositeResource(rsp, dxr); err != nil {
-			response.Fatal(rsp, errors.Wrapf(err, "cannot set desired composite resource in %T", rsp))
+			response.Fatal(rsp, err)
 			return rsp, nil
 		}
 	case strings.HasPrefix(in.Target, "context."):
@@ -340,5 +299,55 @@ func SetNestedKey(root map[string]interface{}, key string, value interface{}) er
 		}
 	}
 
+	return nil
+}
+
+func getQueryFromStatus(req *fnv1.RunFunctionRequest, in *v1beta1.Input) error {
+	oxr, err := request.GetObservedCompositeResource(req)
+	if err != nil {
+		return errors.Wrap(err, "cannot get observed composite resource")
+	}
+	xrStatus := make(map[string]interface{})
+	err = oxr.Resource.GetValueInto("status", &xrStatus)
+	if err != nil {
+		return errors.Wrap(err, "cannot get XR status")
+	}
+	if queryFromXRStatus, ok := GetNestedKey(xrStatus, strings.TrimPrefix(*in.QueryRef, "status.")); ok {
+		in.Query = queryFromXRStatus
+	}
+	return nil
+}
+
+func putQueryResultToStatus(req *fnv1.RunFunctionRequest, rsp *fnv1.RunFunctionResponse, in *v1beta1.Input, results armresourcegraph.ClientResourcesResponse) error {
+	oxr, err := request.GetObservedCompositeResource(req)
+	if err != nil {
+		return errors.Wrap(err, "cannot get observed composite resource")
+	}
+	// The composite resource desired by previous functions in the pipeline.
+	dxr, err := request.GetDesiredCompositeResource(req)
+	if err != nil {
+		return errors.Wrap(err, "cannot get desired composite resource")
+	}
+	dxr.Resource.SetAPIVersion(oxr.Resource.GetAPIVersion())
+	dxr.Resource.SetKind(oxr.Resource.GetKind())
+
+	xrStatus := make(map[string]interface{})
+
+	// Update the specific status field using the reusable function
+	statusField := strings.TrimPrefix(in.Target, "status.")
+	err = SetNestedKey(xrStatus, statusField, results.Data)
+	if err != nil {
+		return errors.Wrapf(err, "cannot set status field %s to %v", statusField, results.Data)
+	}
+
+	// Write the updated status field back into the composite resource
+	if err := dxr.Resource.SetValue("status", xrStatus); err != nil {
+		return errors.Wrap(err, "cannot write updated status back into composite resource")
+	}
+
+	// Save the updated desired composite resource
+	if err := response.SetDesiredCompositeResource(rsp, dxr); err != nil {
+		return errors.Wrapf(err, "cannot set desired composite resource in %T", rsp)
+	}
 	return nil
 }
