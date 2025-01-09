@@ -114,34 +114,11 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 			return rsp, nil
 		}
 	case strings.HasPrefix(in.Target, "context."):
-		contextField := strings.TrimPrefix(in.Target, "context.")
-		data, err := structpb.NewValue(results.Data)
+		err = putQueryResultToContext(req, rsp, in, results, f)
 		if err != nil {
-			response.Fatal(rsp, errors.Wrap(err, "cannot convert results data to structpb.Value"))
+			response.Fatal(rsp, err)
 			return rsp, nil
 		}
-
-		// Convert existing context into a map[string]interface{}
-		contextMap := req.GetContext().AsMap()
-
-		err = SetNestedKey(contextMap, contextField, data.AsInterface())
-		if err != nil {
-			response.Fatal(rsp, errors.Wrap(err, "failed to update context key"))
-			return rsp, nil
-		}
-
-		f.log.Debug("Updating Composition Pipeline Context", "key", contextField, "data", &results.Data)
-
-		// Convert the updated context back into structpb.Struct
-		updatedContext, err := structpb.NewStruct(contextMap)
-		if err != nil {
-			response.Fatal(rsp, errors.Wrap(err, "failed to serialize updated context"))
-			return rsp, nil
-		}
-
-		// Set the updated context
-		rsp.Context = updatedContext
-
 	default:
 		response.Fatal(rsp, errors.Errorf("Unrecognized target field: %s", in.Target))
 		return rsp, nil
@@ -349,5 +326,34 @@ func putQueryResultToStatus(req *fnv1.RunFunctionRequest, rsp *fnv1.RunFunctionR
 	if err := response.SetDesiredCompositeResource(rsp, dxr); err != nil {
 		return errors.Wrapf(err, "cannot set desired composite resource in %T", rsp)
 	}
+	return nil
+}
+
+func putQueryResultToContext(req *fnv1.RunFunctionRequest, rsp *fnv1.RunFunctionResponse, in *v1beta1.Input, results armresourcegraph.ClientResourcesResponse, f *Function) error {
+
+	contextField := strings.TrimPrefix(in.Target, "context.")
+	data, err := structpb.NewValue(results.Data)
+	if err != nil {
+		return errors.Wrap(err, "cannot convert results data to structpb.Value")
+	}
+
+	// Convert existing context into a map[string]interface{}
+	contextMap := req.GetContext().AsMap()
+
+	err = SetNestedKey(contextMap, contextField, data.AsInterface())
+	if err != nil {
+		return errors.Wrap(err, "failed to update context key")
+	}
+
+	f.log.Debug("Updating Composition Pipeline Context", "key", contextField, "data", &results.Data)
+
+	// Convert the updated context back into structpb.Struct
+	updatedContext, err := structpb.NewStruct(contextMap)
+	if err != nil {
+		return errors.Wrap(err, "failed to serialize updated context")
+	}
+
+	// Set the updated context
+	rsp.Context = updatedContext
 	return nil
 }
