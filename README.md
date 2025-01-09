@@ -63,8 +63,8 @@ status:
 
 ### QueryRef
 
-Instead of providing direct query string as in the example above, function
-provides ability to reference query from arbitrary string of Context or Status
+Rather than specifying a direct query string as shown in the example above,
+the function allows referencing a query from any arbitrary string within the Context or Status.
 
 #### Context
 
@@ -90,11 +90,9 @@ provides ability to reference query from arbitrary string of Context or Status
       queryRef: "status.[fancy.key.with.dots].azResourceGraphQuery"
 ```
 
-#### Status
-
 ### Targets
 
-Function supports publishing Query Results to different locations
+Function supports publishing Query Results to different locations.
 
 #### Context
 
