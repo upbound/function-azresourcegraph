@@ -108,7 +108,7 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 
 	switch {
 	case strings.HasPrefix(in.Target, "status."):
-		err = putQueryResultToStatus(req, rsp, in, results)
+		err = putQueryResultToStatus(req, rsp, in, results, f)
 		if err != nil {
 			response.Fatal(rsp, err)
 			return rsp, nil
@@ -295,7 +295,7 @@ func getQueryFromStatus(req *fnv1.RunFunctionRequest, in *v1beta1.Input) error {
 	return nil
 }
 
-func putQueryResultToStatus(req *fnv1.RunFunctionRequest, rsp *fnv1.RunFunctionResponse, in *v1beta1.Input, results armresourcegraph.ClientResourcesResponse) error {
+func putQueryResultToStatus(req *fnv1.RunFunctionRequest, rsp *fnv1.RunFunctionResponse, in *v1beta1.Input, results armresourcegraph.ClientResourcesResponse, f *Function) error {
 	oxr, err := request.GetObservedCompositeResource(req)
 	if err != nil {
 		return errors.Wrap(err, "cannot get observed composite resource")
@@ -309,6 +309,10 @@ func putQueryResultToStatus(req *fnv1.RunFunctionRequest, rsp *fnv1.RunFunctionR
 	dxr.Resource.SetKind(oxr.Resource.GetKind())
 
 	xrStatus := make(map[string]interface{})
+	err = oxr.Resource.GetValueInto("status", &xrStatus)
+	if err != nil {
+		f.log.Debug("Cannot get status from XR")
+	}
 
 	// Update the specific status field using the reusable function
 	statusField := strings.TrimPrefix(in.Target, "status.")
