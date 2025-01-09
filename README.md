@@ -18,6 +18,7 @@ Example pipeline step:
       apiVersion: azresourcegraph.fn.crossplane.io/v1alpha1
       kind: Input
       query: "Resources | project name, location, type, id| where type =~ 'Microsoft.Compute/virtualMachines' | order by name desc"
+      target: "status.azResourceGraphQueryResult"
     credentials:
       - name: azure-creds
         source: Secret
@@ -58,6 +59,65 @@ status:
     location: westus2
     name: devstack-test
     type: microsoft.compute/virtualmachines
+```
+
+### QueryRef
+
+Instead of providing direct query string as in the example above, function
+provides ability to reference query from arbitrary string of Context or Status
+
+#### Context
+
+* Simple context field reference
+```yaml
+      queryRef: "context.azResourceGraphQuery"
+```
+
+* Get data from Environment
+```yaml
+      queryRef: "context.[apiextensions.crossplane.io/environment].azResourceGraphQuery"
+```
+
+#### XR Status
+
+* Simple XR Status field reference
+```yaml
+      queryRef: "status.azResourceGraphQuery"
+```
+
+* Get data from nested field in XR status. Use brackets if key contains dots.
+```yaml
+      queryRef: "status.[fancy.key.with.dots].azResourceGraphQuery"
+```
+
+#### Status
+
+### Targets
+
+Function supports publishing Query Results to different locations
+
+#### Context
+
+* Simple Context field target
+```yaml
+      target: "context.azResourceGraphQueryResult"
+```
+
+* Put results into Environment key
+```yaml
+      target: "context.[apiextensions.crossplane.io/environment].azResourceGraphQuery"
+```
+
+#### XR Status
+
+* Simple XR status field target
+```yaml
+      target: "status.azResourceGraphQueryResult"
+```
+
+* Put query results to nested field under XR status. Use brackets if key contains dots
+```yaml
+      target: "status.[fancy.key.with.dots].azResourceGraphQueryResult"
 ```
 
 
