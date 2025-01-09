@@ -86,12 +86,12 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 			response.Fatal(rsp, errors.Wrap(err, "cannot get XR status"))
 			return rsp, nil
 		}
-		if queryFromXRStatus, ok := GetNestedContextKey(xrStatus, strings.TrimPrefix(*in.QueryRef, "status.")); ok {
+		if queryFromXRStatus, ok := GetNestedKey(xrStatus, strings.TrimPrefix(*in.QueryRef, "status.")); ok {
 			in.Query = queryFromXRStatus
 		}
 	case strings.HasPrefix(*in.QueryRef, "context."):
 		functionContext := req.GetContext().AsMap()
-		if queryFromContext, ok := GetNestedContextKey(functionContext, strings.TrimPrefix(*in.QueryRef, "context.")); ok {
+		if queryFromContext, ok := GetNestedKey(functionContext, strings.TrimPrefix(*in.QueryRef, "context.")); ok {
 			in.Query = queryFromContext
 		}
 	default:
@@ -137,7 +137,7 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 
 		// Update the specific status field using the reusable function
 		statusField := strings.TrimPrefix(in.Target, "status.")
-		err = SetNestedContextKey(xrStatus, statusField, results.Data)
+		err = SetNestedKey(xrStatus, statusField, results.Data)
 		if err != nil {
 			response.Fatal(rsp, errors.Wrapf(err, "cannot set status field %s to %v", statusField, results.Data))
 			return rsp, nil
@@ -165,7 +165,7 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 		// Convert existing context into a map[string]interface{}
 		contextMap := req.GetContext().AsMap()
 
-		err = SetNestedContextKey(contextMap, contextField, data.AsInterface())
+		err = SetNestedKey(contextMap, contextField, data.AsInterface())
 		if err != nil {
 			response.Fatal(rsp, errors.Wrap(err, "failed to update context key"))
 			return rsp, nil
@@ -261,9 +261,10 @@ func (a *AzureQuery) azQuery(ctx context.Context, azureCreds map[string]string, 
 	return results, nil
 }
 
-// ParseNestedKeys enables the bracket and dot notation to key reference
+// ParseNestedKey enables the bracket and dot notation to key reference
 func ParseNestedKey(key string) ([]string, error) {
 	var parts []string
+	// Regular expression to extract keys, supporting both dot and bracket notation
 	regex := regexp.MustCompile(`\[([^\[\]]+)\]|([^.\[\]]+)`)
 	matches := regex.FindAllStringSubmatch(key, -1)
 	for _, match := range matches {
@@ -280,24 +281,15 @@ func ParseNestedKey(key string) ([]string, error) {
 	return parts, nil
 }
 
-// GetNestedContextKey retrieves a nested string value from a map using dot notation keys.
-func GetNestedContextKey(context map[string]interface{}, key string) (string, bool) {
-	// Regular expression to extract keys, supporting both dot and bracket notation
-	keyRegex := regexp.MustCompile(`\[([^\[\]]+)\]|([^.\[\]]+)`)
-	matches := keyRegex.FindAllStringSubmatch(key, -1)
-
-	// Extract all keys in the proper order
-	var keys []string
-	for _, match := range matches {
-		if match[1] != "" {
-			keys = append(keys, match[1]) // Bracket key
-		} else if match[2] != "" {
-			keys = append(keys, match[2]) // Dot key
-		}
+// GetNestedKey retrieves a nested string value from a map using dot notation keys.
+func GetNestedKey(context map[string]interface{}, key string) (string, bool) {
+	parts, err := ParseNestedKey(key)
+	if err != nil {
+		return "", false
 	}
-	currentValue := interface{}(context)
 
-	for _, k := range keys {
+	currentValue := interface{}(context)
+	for _, k := range parts {
 		// Check if the current value is a map
 		if nestedMap, ok := currentValue.(map[string]interface{}); ok {
 			// Get the next value in the nested map
@@ -318,21 +310,11 @@ func GetNestedContextKey(context map[string]interface{}, key string) (string, bo
 	return "", false
 }
 
-func SetNestedContextKey(root map[string]interface{}, key string, value interface{}) error {
-	// Parse the key into parts
-	var parts []string
-	regex := regexp.MustCompile(`\[([^\[\]]+)\]|([^.\[\]]+)`)
-	matches := regex.FindAllStringSubmatch(key, -1)
-	for _, match := range matches {
-		if match[1] != "" {
-			parts = append(parts, match[1]) // Bracket notation
-		} else if match[2] != "" {
-			parts = append(parts, match[2]) // Dot notation
-		}
-	}
-
-	if len(parts) == 0 {
-		return errors.New("invalid key")
+// SetNestedKey sets a value to a nested key from a map using dot notation keys.
+func SetNestedKey(root map[string]interface{}, key string, value interface{}) error {
+	parts, err := ParseNestedKey(key)
+	if err != nil {
+		return err
 	}
 
 	current := root
