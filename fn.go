@@ -149,8 +149,28 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 			response.Fatal(rsp, errors.Wrap(err, "cannot convert results data to structpb.Value"))
 			return rsp, nil
 		}
-		f.log.Debug("Updating Composition environment", "key", contextField, "data", &results.Data)
-		response.SetContextKey(rsp, contextField, data)
+
+		// Convert existing context into a map[string]interface{}
+		contextMap := req.GetContext().AsMap()
+
+		err = SetNestedContextKey(contextMap, contextField, data.AsInterface())
+		if err != nil {
+			response.Fatal(rsp, errors.Wrap(err, "failed to update context key"))
+			return rsp, nil
+		}
+
+		f.log.Debug("Updating Composition Pipeline Context", "key", contextField, "data", &results.Data)
+
+		// Convert the updated context back into structpb.Struct
+		updatedContext, err := structpb.NewStruct(contextMap)
+		if err != nil {
+			response.Fatal(rsp, errors.Wrap(err, "failed to serialize updated context"))
+			return rsp, nil
+		}
+
+		// Set the updated context
+		rsp.Context = updatedContext
+
 	default:
 		response.Fatal(rsp, errors.Errorf("Unrecognized target field: %s", in.Target))
 		return rsp, nil
@@ -265,4 +285,47 @@ func GetNestedContextKey(context map[string]interface{}, key string) (string, bo
 		return result, true
 	}
 	return "", false
+}
+
+func SetNestedContextKey(root map[string]interface{}, key string, value interface{}) error {
+	// Parse the key into parts
+	var parts []string
+	regex := regexp.MustCompile(`\[([^\[\]]+)\]|([^.\[\]]+)`)
+	matches := regex.FindAllStringSubmatch(key, -1)
+	for _, match := range matches {
+		if match[1] != "" {
+			parts = append(parts, match[1]) // Bracket notation
+		} else if match[2] != "" {
+			parts = append(parts, match[2]) // Dot notation
+		}
+	}
+
+	if len(parts) == 0 {
+		return errors.New("invalid key")
+	}
+
+	current := root
+	for i, part := range parts {
+		if i == len(parts)-1 {
+			// Set the value at the final key
+			current[part] = value
+			return nil
+		}
+
+		// Traverse into nested maps or create them if they don't exist
+		if next, exists := current[part]; exists {
+			if nextMap, ok := next.(map[string]interface{}); ok {
+				current = nextMap
+			} else {
+				return fmt.Errorf("key %q exists but is not a map", part)
+			}
+		} else {
+			// Create a new map if the path doesn't exist
+			newMap := make(map[string]interface{})
+			current[part] = newMap
+			current = newMap
+		}
+	}
+
+	return nil
 }

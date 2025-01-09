@@ -166,6 +166,67 @@ func TestRunFunction(t *testing.T) {
 				},
 			},
 		},
+		"ShouldUpdateNestedFieldinXRStatus": {
+			reason: "The Function should update nested field in XR status",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"managementGroups": ["test"],
+						"target": "status.nestedField.azResourceGraphQueryResult"
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:   "FunctionSuccess",
+							Status: fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason: "Success",
+							Target: fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_NORMAL,
+							Message:  `Query: "Resources| count"`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"status": {
+									"nestedField": {
+										"azResourceGraphQueryResult":
+											{
+												"resource": "mock-resource"
+											}
+									}
+								}}`),
+						},
+					},
+				},
+			},
+		},
 		"ShouldFailWithUnsupportedTarget": {
 			reason: "The Function fail in case of unsupported value in Target Field",
 			args: args{
@@ -258,6 +319,118 @@ func TestRunFunction(t *testing.T) {
 								{
 									"resource": "mock-resource"
 								}
+						  }`,
+					),
+				},
+			},
+		},
+		"ShouldUpdateNestedContexField": {
+			reason: "The Function should update nested Context Field",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"managementGroups": ["test"],
+						"target": "context.nestedField.azResourceGraphQueryResult"
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:   "FunctionSuccess",
+							Status: fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason: "Success",
+							Target: fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_NORMAL,
+							Message:  `Query: "Resources| count"`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Context: resource.MustStructJSON(
+						`{
+							"nestedField": {
+							"azResourceGraphQueryResult":
+								{
+									"resource": "mock-resource"
+								}
+							}
+						  }`,
+					),
+				},
+			},
+		},
+		"ShouldUpdateEnvironmentContexField": {
+			reason: "The Function should update environment Context Field that contains dots",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"managementGroups": ["test"],
+						"target": "context.[apiextensions.crossplane.io/environment].azResourceGraphQueryResult"
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:   "FunctionSuccess",
+							Status: fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason: "Success",
+							Target: fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_NORMAL,
+							Message:  `Query: "Resources| count"`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Context: resource.MustStructJSON(
+						`{
+							"apiextensions.crossplane.io/environment": {
+							"azResourceGraphQueryResult":
+								{
+									"resource": "mock-resource"
+								}
+							}
 						  }`,
 					),
 				},
