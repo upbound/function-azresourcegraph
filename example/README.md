@@ -1,43 +1,33 @@
 # Example manifests
 
-You can run your function locally and test it using `crossplane beta render`
-with these example manifests.
+This directory contains a collection of practical examples to demonstrate the functionality. Each example is organized into a directory with a self-descriptive name.
 
-```shell
-# Run the function locally
-$ go run . --insecure --debug
+## Usage
+
+To render a specific example, navigate to its directory and run the `make` command.
+
+Each example provides a unique `composition.yaml` file that highlights a specific function usage scenario.
+
+The Makefile in the examples directory provides a simple `render` target to
+streamline rendering Crossplane compositions.
+
+To enable a successful query, update `secrets/azure-creds.yaml` with
+your valid Azure credentials.
+
+## Example
+
+For instance, the static-query-to-context-field directory demonstrates how to use a static query to populate a specific context field.
+
 ```
-
-```shell
-# Then, in another terminal, call it with these example manifests
-$ crossplane render example/xr.yaml example/composition.yaml example/functions-dev.yaml --function-credentials=example/secrets/azure-creds.yaml -r
+$ cd queryref-from-environment
+$ make
+crossplane render ../xr.yaml composition.yaml ./functions.yaml --function-credentials=../secrets/azure-creds.yaml --extra-resources=envconfig.yaml  -rc
 ---
 apiVersion: example.crossplane.io/v1
 kind: XR
 metadata:
   name: example-xr
 status:
-  azResourceGraphQueryResult:
-  - id: /subscriptions/f403a412-959c-4214-8c4d-ad5598f149cc/resourceGroups/us-vm-zxqnj-s2jdb/providers/Microsoft.Compute/virtualMachines/us-vm-zxqnj-2h59v
-    location: centralus
-    name: us-vm-zxqnj-2h59v
-    type: microsoft.compute/virtualmachines
-  - id: /subscriptions/f403a412-959c-4214-8c4d-ad5598f149cc/resourceGroups/us-vm-lzbpt-tdv2h/providers/Microsoft.Compute/virtualMachines/us-vm-lzbpt-fgcds
-    location: centralus
-    name: us-vm-lzbpt-fgcds
-    type: microsoft.compute/virtualmachines
-  - id: /subscriptions/f403a412-959c-4214-8c4d-ad5598f149cc/resourceGroups/us-vac-dr27h-ttsq5/providers/Microsoft.Compute/virtualMachines/us-vac-dr27h-t7dhd
-    location: centralus
-    name: us-vac-dr27h-t7dhd
-    type: microsoft.compute/virtualmachines
-  - id: /subscriptions/f403a412-959c-4214-8c4d-ad5598f149cc/resourceGroups/my-vm-mm59z/providers/Microsoft.Compute/virtualMachines/my-vm-jm8g2
-    location: swedencentral
-    name: my-vm-jm8g2
-    type: microsoft.compute/virtualmachines
-  - id: /subscriptions/f403a412-959c-4214-8c4d-ad5598f149cc/resourceGroups/javid-labs/providers/Microsoft.Compute/virtualMachines/devstack-test
-    location: westus2
-    name: devstack-test
-    type: microsoft.compute/virtualmachines
   conditions:
   - lastTransitionTime: "2024-01-01T00:00:00Z"
     reason: Available
@@ -46,8 +36,19 @@ status:
 ---
 apiVersion: render.crossplane.io/v1beta1
 kind: Result
-message: 'Query: "Resources | project name, location, type, id| where type =~ ''Microsoft.Compute/virtualMachines''
-  | order by name desc"'
+message: 'Query: "Resources|count"'
 severity: SEVERITY_NORMAL
 step: query-azresourcegraph
+---
+apiVersion: render.crossplane.io/v1beta1
+fields:
+  apiextensions.crossplane.io/environment:
+    apiVersion: internal.crossplane.io/v1alpha1
+    azResourceGraphQuery: Resources|count
+    kind: Environment
+  azResourceGraphQueryResult:
+  - Count: 204
+kind: Context
 ```
+
+Explore the examples to better understand various use cases and integrations!

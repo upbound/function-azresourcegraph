@@ -5,7 +5,7 @@ A function to query [Azure Resource Graph][azresourcegraph]
 
 ## Usage
 
-See [examples][examples]
+See the [examples][examples] for a variety of practical and testable use cases demonstrating this Function.
 
 Example pipeline step:
 
@@ -47,18 +47,6 @@ status:
     location: centralus
     name: us-vm-lzbpt-fgcds
     type: microsoft.compute/virtualmachines
-  - id: /subscriptions/f403a412-959c-4214-8c4d-ad5598f149cc/resourceGroups/us-vac-dr27h-ttsq5/providers/Microsoft.Compute/virtualMachines/us-vac-dr27h-t7dhd
-    location: centralus
-    name: us-vac-dr27h-t7dhd
-    type: microsoft.compute/virtualmachines
-  - id: /subscriptions/f403a412-959c-4214-8c4d-ad5598f149cc/resourceGroups/my-vm-mm59z/providers/Microsoft.Compute/virtualMachines/my-vm-jm8g2
-    location: swedencentral
-    name: my-vm-jm8g2
-    type: microsoft.compute/virtualmachines
-  - id: /subscriptions/f403a412-959c-4214-8c4d-ad5598f149cc/resourceGroups/javid-labs/providers/Microsoft.Compute/virtualMachines/devstack-test
-    location: westus2
-    name: devstack-test
-    type: microsoft.compute/virtualmachines
 ```
 
 ### QueryRef
@@ -66,7 +54,7 @@ status:
 Rather than specifying a direct query string as shown in the example above,
 the function allows referencing a query from any arbitrary string within the Context or Status.
 
-#### Context
+#### Context Query Reference
 
 * Simple context field reference
 ```yaml
@@ -78,7 +66,7 @@ the function allows referencing a query from any arbitrary string within the Con
       queryRef: "context.[apiextensions.crossplane.io/environment].azResourceGraphQuery"
 ```
 
-#### XR Status
+#### XR Status Query Reference
 
 * Simple XR Status field reference
 ```yaml
@@ -94,7 +82,7 @@ the function allows referencing a query from any arbitrary string within the Con
 
 Function supports publishing Query Results to different locations.
 
-#### Context
+#### Context Target
 
 * Simple Context field target
 ```yaml
@@ -106,7 +94,7 @@ Function supports publishing Query Results to different locations.
       target: "context.[apiextensions.crossplane.io/environment].azResourceGraphQuery"
 ```
 
-#### XR Status
+#### XR Status Target
 
 * Simple XR status field target
 ```yaml

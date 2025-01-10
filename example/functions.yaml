@@ -3,12 +3,8 @@ apiVersion: pkg.crossplane.io/v1beta1
 kind: Function
 metadata:
   name: function-azresourcegraph
+  annotations:
+    # This tells crossplane beta render to connect to the function locally.
+    render.crossplane.io/runtime: Development
 spec:
   package: xpkg.upbound.io/upboundcare/function-azresourcegraph:v0.2.0
----
-apiVersion: pkg.crossplane.io/v1beta1
-kind: Function
-metadata:
-  name: function-environment-configs
-spec:
-  package: xpkg.upbound.io/crossplane-contrib/function-environment-configs:v0.2.0
