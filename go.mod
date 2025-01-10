@@ -1,4 +1,4 @@
-module github.com/upboundcare/function-azresourcegraph
+module github.com/upbound/function-azresourcegraph
 
 go 1.23
 
