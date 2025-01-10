@@ -18,7 +18,7 @@ your valid Azure credentials.
 
 For instance, the static-query-to-context-field directory demonstrates how to use a static query to populate a specific context field.
 
-```
+```shell
 $ cd queryref-from-environment
 $ make
 crossplane render ../xr.yaml composition.yaml ./functions.yaml --function-credentials=../secrets/azure-creds.yaml --extra-resources=envconfig.yaml  -rc
