@@ -20,7 +20,7 @@ spec:
             apiVersion: example.crossplane.io/v1
             kind: XR
             status:
-              azResourceGraphQuery: Resources | where type == "${{ .observed.composite.resource.spec.queryResourceType }}" | count
+              azResourceGraphQuery: Resources | where type == "{{ .observed.composite.resource.spec.queryResourceType }}" | count
     - step: query-azresourcegraph
       functionRef:
         name: function-azresourcegraph
@@ -28,7 +28,7 @@ spec:
         apiVersion: azresourcegraph.fn.crossplane.io/v1alpha1
         kind: Input
         queryRef: "status.azResourceGraphQuery"
-        target: "context.azResourceGraphQueryResult"
+        target: "status.azResourceGraphQueryResult"
       credentials:
         - name: azure-creds
           source: Secret
