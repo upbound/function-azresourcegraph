@@ -19,6 +19,10 @@ spec:
           spec:
             description: XRSpec defines the desired state of XR.
             type: object
+            properties:
+              queryResourceType:
+                description: resource type for az resource query construction
+                type: string
           status:
             description: XRStatus defines the observed state of XR.
             type: object
@@ -29,6 +33,9 @@ spec:
                 items:
                   type: object
                 x-kubernetes-preserve-unknown-fields: true
+              azResourceGraphQuery:
+                description: Freeform field containing query results from function-azresourcegraph
+                type: string
         required:
         - spec
         type: object

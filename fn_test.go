@@ -873,8 +873,8 @@ func TestRunFunction(t *testing.T) {
 				},
 			},
 		},
-		"FailIfQueryIsEmpty": {
-			reason: "The Function should fail if Query is empty",
+		"WarningIfQueryIsEmpty": {
+			reason: "The Function should warn if Query is empty",
 			args: args{
 				ctx: context.Background(),
 				req: &fnv1.RunFunctionRequest{
@@ -909,7 +909,7 @@ func TestRunFunction(t *testing.T) {
 					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
 					Results: []*fnv1.Result{
 						{
-							Severity: fnv1.Severity_SEVERITY_FATAL,
+							Severity: fnv1.Severity_SEVERITY_WARNING,
 							Message:  `Query is empty`,
 							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
 						},

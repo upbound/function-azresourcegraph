@@ -8,17 +8,30 @@ spec:
     kind: XR
   mode: Pipeline
   pipeline:
-  - step: query-azresourcegraph
-    functionRef:
-      name: function-azresourcegraph
-    input:
-      apiVersion: azresourcegraph.fn.crossplane.io/v1alpha1
-      kind: Input
-      queryRef: "status.azResourceGraphQuery"
-      target: "context.azResourceGraphQueryResult"
-    credentials:
-      - name: azure-creds
-        source: Secret
-        secretRef:
-          namespace: upbound-system
-          name: azure-account-creds
+    - step: query-to-status
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: example.crossplane.io/v1
+            kind: XR
+            status:
+              azResourceGraphQuery: Resources | where type == "${{ .observed.composite.resource.spec.queryResourceType }}" | count
+    - step: query-azresourcegraph
+      functionRef:
+        name: function-azresourcegraph
+      input:
+        apiVersion: azresourcegraph.fn.crossplane.io/v1alpha1
+        kind: Input
+        queryRef: "status.azResourceGraphQuery"
+        target: "context.azResourceGraphQueryResult"
+      credentials:
+        - name: azure-creds
+          source: Secret
+          secretRef:
+            namespace: upbound-system
+            name: azure-account-creds

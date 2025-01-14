@@ -90,8 +90,8 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 	}
 
 	if in.Query == "" {
-		response.Fatal(rsp, errors.New("Query is empty"))
-		f.log.Info("FAILURE: ", "query is empty", in.Query)
+		response.Warning(rsp, errors.New("Query is empty"))
+		f.log.Info("WARNING: ", "query is empty", in.Query)
 		return rsp, nil
 	}
 
