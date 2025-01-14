@@ -52,7 +52,7 @@ status:
 ### QueryRef
 
 Rather than specifying a direct query string as shown in the example above,
-the function allows referencing a query from any arbitrary string within the Context or Status.
+the function allows referencing a query from any arbitrary field within the Context or Status.
 
 #### Context Query Reference
 
