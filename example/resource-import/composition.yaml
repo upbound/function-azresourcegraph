@@ -1,0 +1,60 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: function-azresourcegraph
+spec:
+  compositeTypeRef:
+    apiVersion: example.crossplane.io/v1
+    kind: XR
+  mode: Pipeline
+  pipeline:
+    - step: query-azresourcegraph
+      functionRef:
+        name: function-azresourcegraph
+      input:
+        apiVersion: azresourcegraph.fn.crossplane.io/v1alpha1
+        kind: Input
+        query: |
+               Resources
+               | where type == "microsoft.network/virtualnetworks"
+               | where tags["import"] == "me"
+               | project name, resourceGroup, location
+        target: "context.azResourceGraphQueryResult"
+      credentials:
+        - name: azure-creds
+          source: Secret
+          secretRef:
+            namespace: upbound-system
+            name: azure-account-creds
+
+    - step: import-as-observe-only
+      functionRef:
+        name: function-kcl
+      input:
+        apiVersion: krm.kcl.dev/v1alpha1
+        kind: KCLInput
+        spec:
+          source: |
+            queryResult = option("params").ctx.azResourceGraphQueryResult[0]
+            importName = queryResult.name
+            importRgName = queryResult.resourceGroup
+            importLocation = queryResult.location
+
+            network = {
+              apiVersion = "network.azure.upbound.io/v1beta2"
+              kind = "VirtualNetwork"
+              metadata.annotations = {
+                "crossplane.io/external-name" = importName
+              }
+              metadata.name = importName
+              spec.managementPolicies = ["Observe"]
+              spec.forProvider = {
+                resourceGroupName = importRgName
+                location = importLocation
+              }
+            }
+            items = [network]
+
+    - step: automatically-detect-ready-composed-resources
+      functionRef:
+        name: function-auto-ready
