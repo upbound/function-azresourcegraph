@@ -35,10 +35,11 @@ spec:
         kind: KCLInput
         spec:
           source: |
-            queryResult = option("params").ctx.azResourceGraphQueryResult[0]
-            importName = queryResult.name
-            importRgName = queryResult.resourceGroup
-            importLocation = queryResult.location
+            queryResult = option("params").ctx.azResourceGraphQueryResult
+            assert len(queryResult) > 0, "Azure Resource Graph query returned no results. Verify the query criteria."
+            importName = queryResult[0].name
+            importRgName = queryResult[0].resourceGroup
+            importLocation = queryResult[0].location
 
             network = {
               apiVersion = "network.azure.upbound.io/v1beta2"
