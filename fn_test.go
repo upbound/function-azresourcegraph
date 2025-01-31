@@ -355,6 +355,84 @@ func TestRunFunction(t *testing.T) {
 				},
 			},
 		},
+		"ShouldKeepOtherFieldsFromPreviousPipelineStepInXRStatusDuringUpdate": {
+			reason: "The Function should update nested field in XR status and keep the other status fields intact if they are coming from previous pipeline step",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"managementGroups": ["test"],
+						"target": "status.nestedField.azResourceGraphQueryResult"
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"status": {
+									"someFieldObserved": "keepmearound"
+								}}`),
+						},
+					},
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"status": {
+									"someFieldDesired": "keepmearound"
+								}}`),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:   "FunctionSuccess",
+							Status: fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason: "Success",
+							Target: fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_NORMAL,
+							Message:  `Query: "Resources| count"`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"status": {
+									"someFieldObserved": "keepmearound",
+									"someFieldDesired": "keepmearound",
+									"nestedField": {
+										"azResourceGraphQueryResult":
+											{
+												"resource": "mock-resource"
+											}
+									}
+								}}`),
+						},
+					},
+				},
+			},
+		},
 		"ShouldFailWithUnsupportedTarget": {
 			reason: "The Function fail in case of unsupported value in Target Field",
 			args: args{
