@@ -305,13 +305,22 @@ func putQueryResultToStatus(req *fnv1.RunFunctionRequest, rsp *fnv1.RunFunctionR
 	if err != nil {
 		return errors.Wrap(err, "cannot get desired composite resource")
 	}
-	dxr.Resource.SetAPIVersion(oxr.Resource.GetAPIVersion())
-	dxr.Resource.SetKind(oxr.Resource.GetKind())
-
 	xrStatus := make(map[string]interface{})
-	err = oxr.Resource.GetValueInto("status", &xrStatus)
-	if err != nil {
-		f.log.Debug("Cannot get status from XR")
+	// Use Desired XR from previous pipeline as the current status
+	// Otherwise get status from Observed XR
+	if dxr.Resource.GetKind() != "" {
+		err = dxr.Resource.GetValueInto("status", &xrStatus)
+		if err != nil {
+			f.log.Debug("Cannot get status from XR")
+		}
+	} else {
+		dxr.Resource.SetAPIVersion(oxr.Resource.GetAPIVersion())
+		dxr.Resource.SetKind(oxr.Resource.GetKind())
+
+		err = oxr.Resource.GetValueInto("status", &xrStatus)
+		if err != nil {
+			f.log.Debug("Cannot get status from XR")
+		}
 	}
 
 	// Update the specific status field using the reusable function

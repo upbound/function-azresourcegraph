@@ -368,16 +368,6 @@ func TestRunFunction(t *testing.T) {
 						"managementGroups": ["test"],
 						"target": "status.nestedField.azResourceGraphQueryResult"
 					}`),
-					Observed: &fnv1.State{
-						Composite: &fnv1.Resource{
-							Resource: resource.MustStructJSON(`{
-								"apiVersion": "example.org/v1",
-								"kind": "XR",
-								"status": {
-									"someFieldObserved": "keepmearound"
-								}}`),
-						},
-					},
 					Desired: &fnv1.State{
 						Composite: &fnv1.Resource{
 							Resource: resource.MustStructJSON(`{
@@ -419,7 +409,6 @@ func TestRunFunction(t *testing.T) {
 								"apiVersion": "example.org/v1",
 								"kind": "XR",
 								"status": {
-									"someFieldObserved": "keepmearound",
 									"someFieldDesired": "keepmearound",
 									"nestedField": {
 										"azResourceGraphQueryResult":
