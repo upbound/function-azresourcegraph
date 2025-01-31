@@ -1,0 +1,38 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: function-azresourcegraph
+spec:
+  compositeTypeRef:
+    apiVersion: example.crossplane.io/v1
+    kind: XR
+  mode: Pipeline
+  pipeline:
+  - step: query-azresourcegraph1
+    functionRef:
+      name: function-azresourcegraph
+    input:
+      apiVersion: azresourcegraph.fn.crossplane.io/v1alpha1
+      kind: Input
+      query: "Resources | project name, location, type, id| where type =~ 'Microsoft.Compute/virtualMachines' | count"
+      target: "status.azResourceGraphQueryResult1"
+    credentials:
+      - name: azure-creds
+        source: Secret
+        secretRef:
+          namespace: upbound-system
+          name: azure-account-creds
+  - step: query-azresourcegraph2
+    functionRef:
+      name: function-azresourcegraph
+    input:
+      apiVersion: azresourcegraph.fn.crossplane.io/v1alpha1
+      kind: Input
+      query: "Resources | project name, location, type, id| where type =~ 'Microsoft.Compute/virtualMachines' | count"
+      target: "status.azResourceGraphQueryResult2"
+    credentials:
+      - name: azure-creds
+        source: Secret
+        secretRef:
+          namespace: upbound-system
+          name: azure-account-creds
