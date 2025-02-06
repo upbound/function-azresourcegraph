@@ -3,4 +3,14 @@ apiVersion: meta.pkg.crossplane.io/v1beta1
 kind: Function
 metadata:
   name: function-azresourcegraph
+  annotations:
+    meta.crossplane.io/maintainer: Upbound <support@upbound.io>
+    meta.crossplane.io/source: github.com/upbound/function-azresourcegraph
+    meta.crossplane.io/license: Apache-2.0
+    meta.crossplane.io/description: A composition function for querying Azure Resource Graph.
+    meta.crossplane.io/readme: |
+      This composition function allows you to query [Azure Resource Graph](https://learn.microsoft.com/en-us/azure/governance/resource-graph/overview)
+      using its query language.
+
+      The secret for Azure credentials is compatible with the [Official Azure Provider](https://marketplace.upbound.io/providers/upbound/provider-family-azure/latest).
 spec: {}
