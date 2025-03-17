@@ -37,4 +37,9 @@ type Input struct {
 
 	// Target where to store the Query Result
 	Target string `json:"target"`
+
+	// SkipQueryWhenTargetHasData controls whether to skip the query when the target already has data
+	// Default is false to ensure continuous reconciliation
+	// +optional
+	SkipQueryWhenTargetHasData *bool `json:"skipQueryWhenTargetHasData,omitempty"`
 }

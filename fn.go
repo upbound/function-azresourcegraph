@@ -95,24 +95,44 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 		return rsp, nil
 	}
 
-	// Check if target already has data before executing the query
-	var shouldExecuteQuery = true
+	// Determine if we should skip the query when target has data
+	var shouldSkipQueryWhenTargetHasData = false // Default to false to ensure continuous reconciliation
+	if in.SkipQueryWhenTargetHasData != nil {
+		shouldSkipQueryWhenTargetHasData = *in.SkipQueryWhenTargetHasData
+	}
 
 	switch {
 	case strings.HasPrefix(in.Target, "status."):
-		// Check if the target field in status already exists
-		oxr, err := request.GetObservedCompositeResource(req)
-		if err != nil {
-			response.Fatal(rsp, errors.Wrap(err, "cannot get observed composite resource"))
-			return rsp, nil
-		}
+		if shouldSkipQueryWhenTargetHasData {
+			// Check if the target field in status already exists
+			oxr, err := request.GetObservedCompositeResource(req)
+			if err != nil {
+				response.Fatal(rsp, errors.Wrap(err, "cannot get observed composite resource"))
+				return rsp, nil
+			}
 
-		xrStatus := make(map[string]interface{})
-		err = oxr.Resource.GetValueInto("status", &xrStatus)
-		if err == nil {
-			// Check if the target field already has data
-			statusField := strings.TrimPrefix(in.Target, "status.")
-			if hasData, _ := targetHasData(xrStatus, statusField); hasData {
+			xrStatus := make(map[string]interface{})
+			err = oxr.Resource.GetValueInto("status", &xrStatus)
+			if err == nil {
+				// Check if the target field already has data
+				statusField := strings.TrimPrefix(in.Target, "status.")
+				if hasData, _ := targetHasData(xrStatus, statusField); hasData {
+					f.log.Info("Target already has data, skipping query", "target", in.Target)
+
+					// Set success condition and return
+					response.ConditionTrue(rsp, "FunctionSuccess", "SkippedQuery").
+						WithMessage("Target already has data, skipped query to avoid throttling").
+						TargetCompositeAndClaim()
+					return rsp, nil
+				}
+			}
+		}
+	case strings.HasPrefix(in.Target, "context."):
+		if shouldSkipQueryWhenTargetHasData {
+			// Check if the target field in context already exists
+			contextMap := req.GetContext().AsMap()
+			contextField := strings.TrimPrefix(in.Target, "context.")
+			if hasData, _ := targetHasData(contextMap, contextField); hasData {
 				f.log.Info("Target already has data, skipping query", "target", in.Target)
 
 				// Set success condition and return
@@ -122,45 +142,24 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 				return rsp, nil
 			}
 		}
-	case strings.HasPrefix(in.Target, "context."):
-		// Check if the target field in context already exists
-		contextMap := req.GetContext().AsMap()
-		contextField := strings.TrimPrefix(in.Target, "context.")
-		if hasData, _ := targetHasData(contextMap, contextField); hasData {
-			f.log.Info("Target already has data, skipping query", "target", in.Target)
-
-			// Set success condition and return
-			response.ConditionTrue(rsp, "FunctionSuccess", "SkippedQuery").
-				WithMessage("Target already has data, skipped query to avoid throttling").
-				TargetCompositeAndClaim()
-			return rsp, nil
-		}
 	default:
 		response.Fatal(rsp, errors.Errorf("Unrecognized target field: %s", in.Target))
 		return rsp, nil
 	}
 
-	// Only execute the query if necessary
 	var results armresourcegraph.ClientResourcesResponse
-	if shouldExecuteQuery {
-		var err error
-		results, err = f.azureQuery.azQuery(ctx, azureCreds, in)
-		if err != nil {
-			response.Fatal(rsp, err)
-			f.log.Info("FAILURE: ", "failure", fmt.Sprint(err))
-			return rsp, nil
-		}
-		// Print the obtained query results
-		f.log.Info("Query:", "query", in.Query)
-		f.log.Info("Results:", "results", fmt.Sprint(results.Data))
-		response.Normalf(rsp, "Query: %q", in.Query)
-	} else {
-		// We should never reach here due to early returns above, but just in case
-		response.Normalf(rsp, "Skipped query: %q", in.Query)
+	results, err = f.azureQuery.azQuery(ctx, azureCreds, in)
+	if err != nil {
+		response.Fatal(rsp, err)
+		f.log.Info("FAILURE: ", "failure", fmt.Sprint(err))
 		return rsp, nil
 	}
+	// Print the obtained query results
+	f.log.Info("Query:", "query", in.Query)
+	f.log.Info("Results:", "results", fmt.Sprint(results.Data))
+	response.Normalf(rsp, "Query: %q", in.Query)
 
-	// Now check if the target is valid and write to the target
+	// Now check if the target is valid
 	switch {
 	case strings.HasPrefix(in.Target, "status."):
 		err = putQueryResultToStatus(req, rsp, in, results, f)
@@ -175,6 +174,9 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 			return rsp, nil
 		}
 	default:
+		// This is the case that the test is expecting
+		// We've already added the normal message with the query above
+		// Now we add the fatal error about the unrecognized target
 		response.Fatal(rsp, errors.Errorf("Unrecognized target field: %s", in.Target))
 		return rsp, nil
 	}

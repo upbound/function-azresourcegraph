@@ -993,7 +993,8 @@ func TestRunFunction(t *testing.T) {
 						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
 						"kind": "Input",
 						"query": "Resources| count",
-						"target": "status.azResourceGraphQueryResult"
+						"target": "status.azResourceGraphQueryResult",
+						"skipQueryWhenTargetHasData": true
 					}`),
 					Observed: &fnv1.State{
 						Composite: &fnv1.Resource{
@@ -1040,7 +1041,8 @@ func TestRunFunction(t *testing.T) {
 						"kind": "Input",
 						"query": "Resources| count",
 						"managementGroups": ["test"],
-						"target": "status.nestedField.azResourceGraphQueryResult"
+						"target": "status.nestedField.azResourceGraphQueryResult",
+						"skipQueryWhenTargetHasData": true
 					}`),
 					Observed: &fnv1.State{
 						Composite: &fnv1.Resource{
@@ -1089,7 +1091,8 @@ func TestRunFunction(t *testing.T) {
 						"kind": "Input",
 						"query": "Resources| count",
 						"managementGroups": ["test"],
-						"target": "context.azResourceGraphQueryResult"
+						"target": "context.azResourceGraphQueryResult",
+						"skipQueryWhenTargetHasData": true
 					}`),
 					Observed: &fnv1.State{
 						Composite: &fnv1.Resource{
@@ -1139,7 +1142,8 @@ func TestRunFunction(t *testing.T) {
 						"kind": "Input",
 						"query": "Resources| count",
 						"managementGroups": ["test"],
-						"target": "context.nestedField.azResourceGraphQueryResult"
+						"target": "context.nestedField.azResourceGraphQueryResult",
+						"skipQueryWhenTargetHasData": true
 					}`),
 					Observed: &fnv1.State{
 						Composite: &fnv1.Resource{
