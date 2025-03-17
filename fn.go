@@ -95,17 +95,72 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 		return rsp, nil
 	}
 
-	results, err := f.azureQuery.azQuery(ctx, azureCreds, in)
-	if err != nil {
-		response.Fatal(rsp, err)
-		f.log.Info("FAILURE: ", "failure", fmt.Sprint(err))
+	// Check if target already has data before executing the query
+	var shouldExecuteQuery = true
+
+	switch {
+	case strings.HasPrefix(in.Target, "status."):
+		// Check if the target field in status already exists
+		oxr, err := request.GetObservedCompositeResource(req)
+		if err != nil {
+			response.Fatal(rsp, errors.Wrap(err, "cannot get observed composite resource"))
+			return rsp, nil
+		}
+
+		xrStatus := make(map[string]interface{})
+		err = oxr.Resource.GetValueInto("status", &xrStatus)
+		if err == nil {
+			// Check if the target field already has data
+			statusField := strings.TrimPrefix(in.Target, "status.")
+			if hasData, _ := targetHasData(xrStatus, statusField); hasData {
+				f.log.Info("Target already has data, skipping query", "target", in.Target)
+
+				// Set success condition and return
+				response.ConditionTrue(rsp, "FunctionSuccess", "SkippedQuery").
+					WithMessage("Target already has data, skipped query to avoid throttling").
+					TargetCompositeAndClaim()
+				return rsp, nil
+			}
+		}
+	case strings.HasPrefix(in.Target, "context."):
+		// Check if the target field in context already exists
+		contextMap := req.GetContext().AsMap()
+		contextField := strings.TrimPrefix(in.Target, "context.")
+		if hasData, _ := targetHasData(contextMap, contextField); hasData {
+			f.log.Info("Target already has data, skipping query", "target", in.Target)
+
+			// Set success condition and return
+			response.ConditionTrue(rsp, "FunctionSuccess", "SkippedQuery").
+				WithMessage("Target already has data, skipped query to avoid throttling").
+				TargetCompositeAndClaim()
+			return rsp, nil
+		}
+	default:
+		response.Fatal(rsp, errors.Errorf("Unrecognized target field: %s", in.Target))
 		return rsp, nil
 	}
-	// Print the obtained query results
-	f.log.Info("Query:", "query", in.Query)
-	f.log.Info("Results:", "results", fmt.Sprint(results.Data))
-	response.Normalf(rsp, "Query: %q", in.Query)
 
+	// Only execute the query if necessary
+	var results armresourcegraph.ClientResourcesResponse
+	if shouldExecuteQuery {
+		var err error
+		results, err = f.azureQuery.azQuery(ctx, azureCreds, in)
+		if err != nil {
+			response.Fatal(rsp, err)
+			f.log.Info("FAILURE: ", "failure", fmt.Sprint(err))
+			return rsp, nil
+		}
+		// Print the obtained query results
+		f.log.Info("Query:", "query", in.Query)
+		f.log.Info("Results:", "results", fmt.Sprint(results.Data))
+		response.Normalf(rsp, "Query: %q", in.Query)
+	} else {
+		// We should never reach here due to early returns above, but just in case
+		response.Normalf(rsp, "Skipped query: %q", in.Query)
+		return rsp, nil
+	}
+
+	// Now check if the target is valid and write to the target
 	switch {
 	case strings.HasPrefix(in.Target, "status."):
 		err = putQueryResultToStatus(req, rsp, in, results, f)
@@ -369,4 +424,53 @@ func putQueryResultToContext(req *fnv1.RunFunctionRequest, rsp *fnv1.RunFunction
 	// Set the updated context
 	rsp.Context = updatedContext
 	return nil
+}
+
+// targetHasData checks if a target field already has data
+func targetHasData(data map[string]interface{}, key string) (bool, error) {
+	parts, err := ParseNestedKey(key)
+	if err != nil {
+		return false, err
+	}
+
+	currentValue := interface{}(data)
+	for _, k := range parts {
+		// Check if the current value is a map
+		if nestedMap, ok := currentValue.(map[string]interface{}); ok {
+			// Get the next value in the nested map
+			if nextValue, exists := nestedMap[k]; exists {
+				currentValue = nextValue
+			} else {
+				// Key doesn't exist, so no data
+				return false, nil
+			}
+		} else {
+			// Not a map, so can't traverse further
+			return false, nil
+		}
+	}
+
+	// If we've reached here, the key exists
+	// Check if it has meaningful data (not nil and not empty)
+	if currentValue == nil {
+		return false, nil
+	}
+
+	// Check for empty maps
+	if nestedMap, ok := currentValue.(map[string]interface{}); ok {
+		return len(nestedMap) > 0, nil
+	}
+
+	// Check for empty slices
+	if slice, ok := currentValue.([]interface{}); ok {
+		return len(slice) > 0, nil
+	}
+
+	// For strings, check if empty
+	if str, ok := currentValue.(string); ok {
+		return str != "", nil
+	}
+
+	// For other types (numbers, booleans), consider them as having data
+	return true, nil
 }

@@ -26,6 +26,10 @@ func (m *MockAzureQuery) azQuery(ctx context.Context, azureCreds map[string]stri
 	return m.AzQueryFunc(ctx, azureCreds, in)
 }
 
+func strPtr(s string) *string {
+	return &s
+}
+
 func TestRunFunction(t *testing.T) {
 
 	var (
@@ -62,7 +66,7 @@ func TestRunFunction(t *testing.T) {
 				req: &fnv1.RunFunctionRequest{
 					Meta: &fnv1.RequestMeta{Tag: "hello"},
 					Input: resource.MustStructJSON(`{
-						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
 						"kind": "Input",
 						"query": "Resources| count"
 					}`),
@@ -87,7 +91,7 @@ func TestRunFunction(t *testing.T) {
 				req: &fnv1.RunFunctionRequest{
 					Meta: &fnv1.RequestMeta{Tag: "hello"},
 					Input: resource.MustStructJSON(`{
-						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
 						"kind": "Input",
 						"query": "Resources| count",
 						"managementGroups": ["test"]
@@ -114,7 +118,7 @@ func TestRunFunction(t *testing.T) {
 				req: &fnv1.RunFunctionRequest{
 					Meta: &fnv1.RequestMeta{Tag: "hello"},
 					Input: resource.MustStructJSON(`{
-						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
 						"kind": "Input",
 						"query": "Resources| count",
 						"managementGroups": ["test"],
@@ -173,7 +177,7 @@ func TestRunFunction(t *testing.T) {
 				req: &fnv1.RunFunctionRequest{
 					Meta: &fnv1.RequestMeta{Tag: "hello"},
 					Input: resource.MustStructJSON(`{
-						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
 						"kind": "Input",
 						"query": "Resources| count",
 						"managementGroups": ["test"],
@@ -234,7 +238,7 @@ func TestRunFunction(t *testing.T) {
 				req: &fnv1.RunFunctionRequest{
 					Meta: &fnv1.RequestMeta{Tag: "hello"},
 					Input: resource.MustStructJSON(`{
-						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
 						"kind": "Input",
 						"query": "Resources| count",
 						"managementGroups": ["test"],
@@ -295,7 +299,7 @@ func TestRunFunction(t *testing.T) {
 				req: &fnv1.RunFunctionRequest{
 					Meta: &fnv1.RequestMeta{Tag: "hello"},
 					Input: resource.MustStructJSON(`{
-						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
 						"kind": "Input",
 						"query": "Resources| count",
 						"managementGroups": ["test"],
@@ -362,7 +366,7 @@ func TestRunFunction(t *testing.T) {
 				req: &fnv1.RunFunctionRequest{
 					Meta: &fnv1.RequestMeta{Tag: "hello"},
 					Input: resource.MustStructJSON(`{
-						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
 						"kind": "Input",
 						"query": "Resources| count",
 						"managementGroups": ["test"],
@@ -429,7 +433,7 @@ func TestRunFunction(t *testing.T) {
 				req: &fnv1.RunFunctionRequest{
 					Meta: &fnv1.RequestMeta{Tag: "hello"},
 					Input: resource.MustStructJSON(`{
-						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
 						"kind": "Input",
 						"query": "Resources| count",
 						"managementGroups": ["test"],
@@ -452,11 +456,6 @@ func TestRunFunction(t *testing.T) {
 					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
 					Results: []*fnv1.Result{
 						{
-							Severity: fnv1.Severity_SEVERITY_NORMAL,
-							Message:  `Query: "Resources| count"`,
-							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
-						},
-						{
 							Severity: fnv1.Severity_SEVERITY_FATAL,
 							Message:  "Unrecognized target field: notcool.azResourceGraphQueryResult",
 							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
@@ -472,7 +471,7 @@ func TestRunFunction(t *testing.T) {
 				req: &fnv1.RunFunctionRequest{
 					Meta: &fnv1.RequestMeta{Tag: "hello"},
 					Input: resource.MustStructJSON(`{
-						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
 						"kind": "Input",
 						"query": "Resources| count",
 						"managementGroups": ["test"],
@@ -526,7 +525,7 @@ func TestRunFunction(t *testing.T) {
 				req: &fnv1.RunFunctionRequest{
 					Meta: &fnv1.RequestMeta{Tag: "hello"},
 					Input: resource.MustStructJSON(`{
-						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
 						"kind": "Input",
 						"query": "Resources| count",
 						"managementGroups": ["test"],
@@ -582,7 +581,7 @@ func TestRunFunction(t *testing.T) {
 				req: &fnv1.RunFunctionRequest{
 					Meta: &fnv1.RequestMeta{Tag: "hello"},
 					Input: resource.MustStructJSON(`{
-						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
 						"kind": "Input",
 						"query": "Resources| count",
 						"managementGroups": ["test"],
@@ -638,7 +637,7 @@ func TestRunFunction(t *testing.T) {
 				req: &fnv1.RunFunctionRequest{
 					Meta: &fnv1.RequestMeta{Tag: "hello"},
 					Input: resource.MustStructJSON(`{
-						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
 						"kind": "Input",
 						"queryRef": "context.azResourceGraphQuery",
 						"target": "context.azResourceGraphQueryResult"
@@ -697,7 +696,7 @@ func TestRunFunction(t *testing.T) {
 				req: &fnv1.RunFunctionRequest{
 					Meta: &fnv1.RequestMeta{Tag: "hello"},
 					Input: resource.MustStructJSON(`{
-						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
 						"kind": "Input",
 						"queryRef": "context.somekey.nestedazResourceGraphQuery",
 						"target": "context.azResourceGraphQueryResult"
@@ -766,7 +765,7 @@ func TestRunFunction(t *testing.T) {
 				req: &fnv1.RunFunctionRequest{
 					Meta: &fnv1.RequestMeta{Tag: "hello"},
 					Input: resource.MustStructJSON(`{
-						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
 						"kind": "Input",
 						"queryRef": "context.[apiextensions.crossplane.io/environment].azResourceGraphQuery",
 						"target": "context.azResourceGraphQueryResult"
@@ -829,7 +828,7 @@ func TestRunFunction(t *testing.T) {
 				req: &fnv1.RunFunctionRequest{
 					Meta: &fnv1.RequestMeta{Tag: "hello"},
 					Input: resource.MustStructJSON(`{
-						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
 						"kind": "Input",
 						"queryRef": "status.azResourceGraphQuery",
 						"target": "context.azResourceGraphQueryResult"
@@ -887,7 +886,7 @@ func TestRunFunction(t *testing.T) {
 				req: &fnv1.RunFunctionRequest{
 					Meta: &fnv1.RequestMeta{Tag: "hello"},
 					Input: resource.MustStructJSON(`{
-						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
 						"kind": "Input",
 						"queryRef": "status.testKey.azResourceGraphQuery",
 						"target": "context.azResourceGraphQueryResult"
@@ -947,7 +946,7 @@ func TestRunFunction(t *testing.T) {
 				req: &fnv1.RunFunctionRequest{
 					Meta: &fnv1.RequestMeta{Tag: "hello"},
 					Input: resource.MustStructJSON(`{
-						"apiVersion": "azresourcegraph.fn.crossplane.io/v1alpha1",
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
 						"kind": "Input",
 						"queryRef": "status.nonExistingKey.azResourceGraphQuery",
 						"target": "context.azResourceGraphQueryResult"
@@ -981,6 +980,324 @@ func TestRunFunction(t *testing.T) {
 							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
 						},
 					},
+				},
+			},
+		},
+		"ShouldSkipQueryWhenStatusTargetHasData": {
+			reason: "The Function should skip query when status target already has data",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"target": "status.azResourceGraphQueryResult"
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"status": {
+									"azResourceGraphQueryResult": {
+										"resource": "existing-data"
+									}
+								}}`),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:    "FunctionSuccess",
+							Message: strPtr("Target already has data, skipped query to avoid throttling"),
+							Status:  fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason:  "SkippedQuery",
+							Target:  fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+				},
+			},
+		},
+		"ShouldSkipQueryWhenNestedStatusTargetHasData": {
+			reason: "The Function should skip query when nested status target already has data",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"managementGroups": ["test"],
+						"target": "status.nestedField.azResourceGraphQueryResult"
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"status": {
+									"nestedField": {
+										"azResourceGraphQueryResult": {
+											"resource": "existing-data"
+										}
+									}
+								}}`),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:    "FunctionSuccess",
+							Message: strPtr("Target already has data, skipped query to avoid throttling"),
+							Status:  fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason:  "SkippedQuery",
+							Target:  fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+				},
+			},
+		},
+		"ShouldSkipQueryWhenContextTargetHasData": {
+			reason: "The Function should skip query when context target already has data",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"managementGroups": ["test"],
+						"target": "context.azResourceGraphQueryResult"
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+					Context: resource.MustStructJSON(`{
+						"azResourceGraphQueryResult": {
+							"resource": "existing-data"
+						}
+					}`),
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:    "FunctionSuccess",
+							Message: strPtr("Target already has data, skipped query to avoid throttling"),
+							Status:  fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason:  "SkippedQuery",
+							Target:  fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Context: resource.MustStructJSON(`{
+						"azResourceGraphQueryResult": {
+							"resource": "existing-data"
+						}
+					}`),
+				},
+			},
+		},
+		"ShouldSkipQueryWhenNestedContextTargetHasData": {
+			reason: "The Function should skip query when nested context target already has data",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"managementGroups": ["test"],
+						"target": "context.nestedField.azResourceGraphQueryResult"
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+					Context: resource.MustStructJSON(`{
+						"nestedField": {
+							"azResourceGraphQueryResult": {
+								"resource": "existing-data"
+							}
+						}
+					}`),
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:    "FunctionSuccess",
+							Message: strPtr("Target already has data, skipped query to avoid throttling"),
+							Status:  fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason:  "SkippedQuery",
+							Target:  fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Context: resource.MustStructJSON(`{
+						"nestedField": {
+							"azResourceGraphQueryResult": {
+								"resource": "existing-data"
+							}
+						}
+					}`),
+				},
+			},
+		},
+		"ShouldExecuteQueryWhenStatusTargetHasEmptyMap": {
+			reason: "The Function should execute query when status target has empty map",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"managementGroups": ["test"],
+						"target": "status.azResourceGraphQueryResult"
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"status": {
+									"azResourceGraphQueryResult": {}
+								}}`),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:   "FunctionSuccess",
+							Status: fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason: "Success",
+							Target: fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_NORMAL,
+							Message:  `Query: "Resources| count"`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"status": {
+									"azResourceGraphQueryResult":
+										{
+											"resource": "mock-resource"
+										}
+								}}`),
+						},
+					},
+				},
+			},
+		},
+		"ShouldExecuteQueryWhenContextTargetHasEmptyMap": {
+			reason: "The Function should execute query when context target has empty map",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"managementGroups": ["test"],
+						"target": "context.azResourceGraphQueryResult"
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+					Context: resource.MustStructJSON(`{
+						"azResourceGraphQueryResult": {}
+					}`),
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:   "FunctionSuccess",
+							Status: fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason: "Success",
+							Target: fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_NORMAL,
+							Message:  `Query: "Resources| count"`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Context: resource.MustStructJSON(`{
+						"azResourceGraphQueryResult":
+							{
+								"resource": "mock-resource"
+							}
+					}`),
 				},
 			},
 		},
