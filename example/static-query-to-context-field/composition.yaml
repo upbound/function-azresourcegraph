@@ -12,10 +12,11 @@ spec:
     functionRef:
       name: function-azresourcegraph
     input:
-      apiVersion: azresourcegraph.fn.crossplane.io/v1alpha1
+      apiVersion: azresourcegraph.fn.crossplane.io/v1beta1
       kind: Input
       query: "Resources | project name, location, type, id| where type =~ 'Microsoft.Compute/virtualMachines' | order by name desc"
       target: "context.azResourceGraphQueryResult"
+      # skipQueryWhenTargetHasData: true # Optional: Set to true to skip query if target already has data
     credentials:
       - name: azure-creds
         source: Secret
