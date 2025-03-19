@@ -1020,7 +1020,7 @@ func TestRunFunction(t *testing.T) {
 					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
 					Conditions: []*fnv1.Condition{
 						{
-							Type:    "FunctionSuccess",
+							Type:    "FunctionSkip",
 							Message: strPtr("Target already has data, skipped query to avoid throttling"),
 							Status:  fnv1.Status_STATUS_CONDITION_TRUE,
 							Reason:  "SkippedQuery",
@@ -1070,7 +1070,7 @@ func TestRunFunction(t *testing.T) {
 					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
 					Conditions: []*fnv1.Condition{
 						{
-							Type:    "FunctionSuccess",
+							Type:    "FunctionSkip",
 							Message: strPtr("Target already has data, skipped query to avoid throttling"),
 							Status:  fnv1.Status_STATUS_CONDITION_TRUE,
 							Reason:  "SkippedQuery",
@@ -1116,7 +1116,7 @@ func TestRunFunction(t *testing.T) {
 					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
 					Conditions: []*fnv1.Condition{
 						{
-							Type:    "FunctionSuccess",
+							Type:    "FunctionSkip",
 							Message: strPtr("Target already has data, skipped query to avoid throttling"),
 							Status:  fnv1.Status_STATUS_CONDITION_TRUE,
 							Reason:  "SkippedQuery",
@@ -1169,7 +1169,7 @@ func TestRunFunction(t *testing.T) {
 					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
 					Conditions: []*fnv1.Condition{
 						{
-							Type:    "FunctionSuccess",
+							Type:    "FunctionSkip",
 							Message: strPtr("Target already has data, skipped query to avoid throttling"),
 							Status:  fnv1.Status_STATUS_CONDITION_TRUE,
 							Reason:  "SkippedQuery",

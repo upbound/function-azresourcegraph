@@ -181,7 +181,7 @@ func (f *Function) checkStatusTargetHasData(req *fnv1.RunFunctionRequest, in *v1
 			f.log.Info("Target already has data, skipping query", "target", in.Target)
 
 			// Set success condition and return
-			response.ConditionTrue(rsp, "FunctionSuccess", "SkippedQuery").
+			response.ConditionTrue(rsp, "FunctionSkip", "SkippedQuery").
 				WithMessage("Target already has data, skipped query to avoid throttling").
 				TargetCompositeAndClaim()
 			return true
@@ -198,7 +198,7 @@ func (f *Function) checkContextTargetHasData(req *fnv1.RunFunctionRequest, in *v
 		f.log.Info("Target already has data, skipping query", "target", in.Target)
 
 		// Set success condition and return
-		response.ConditionTrue(rsp, "FunctionSuccess", "SkippedQuery").
+		response.ConditionTrue(rsp, "FunctionSkip", "SkippedQuery").
 			WithMessage("Target already has data, skipped query to avoid throttling").
 			TargetCompositeAndClaim()
 		return true
