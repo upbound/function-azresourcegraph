@@ -106,6 +106,25 @@ Function supports publishing Query Results to different locations.
       target: "status.[fancy.key.with.dots].azResourceGraphQueryResult"
 ```
 
+## Mitigating Azure API throttling
+
+If you encounter Azure API throttling, you can reduce the number of queries
+using the optional `skipQueryWhenTargetHasData` flag:
+
+```yaml
+  - step: query-azresourcegraph
+    functionRef:
+      name: function-azresourcegraph
+    input:
+      apiVersion: azresourcegraph.fn.crossplane.io/v1beta1
+      kind: Input
+      query: "Resources | project name, location, type, id| where type =~ 'Microsoft.Compute/virtualMachines' | order by name desc"
+      target: "status.azResourceGraphQueryResult"
+      skipQueryWhenTargetHasData: true # Optional: Set to true to skip query if target already contains data
+```
+
+Use this option carefully, as it may lead to stale query results over time.
+
 
 [azresourcegraph]: https://learn.microsoft.com/en-us/azure/governance/resource-graph/
 [azop]: https://marketplace.upbound.io/providers/upbound/provider-family-azure/latest
