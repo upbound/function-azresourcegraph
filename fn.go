@@ -40,6 +40,13 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 
 	rsp := response.To(req, response.DefaultTTL)
 
+	// Ensure oxr to dxr gets propagated and we keep status around
+	if err := f.propagateDesiredXR(req, rsp); err != nil {
+		return rsp, nil //nolint:nilerr // errors are handled in rsp. We should not error main function and proceed with reconciliation
+	}
+	// Ensure the context is preserved
+	f.preserveContext(req, rsp)
+
 	// Parse input and get credentials
 	in, azureCreds, err := f.parseInputAndCredentials(req, rsp)
 	if err != nil {
@@ -66,6 +73,9 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 
 	// Check if we should skip the query
 	if f.shouldSkipQuery(req, in, rsp) {
+		// Set success condition
+		response.ConditionTrue(rsp, "FunctionSuccess", "Success").
+			TargetCompositeAndClaim()
 		return rsp, nil
 	}
 
@@ -174,9 +184,11 @@ func (f *Function) checkStatusTargetHasData(req *fnv1.RunFunctionRequest, in *v1
 
 	xrStatus := make(map[string]interface{})
 	err = oxr.Resource.GetValueInto("status", &xrStatus)
+
 	if err == nil {
 		// Check if the target field already has data
 		statusField := strings.TrimPrefix(in.Target, "status.")
+
 		if hasData, _ := targetHasData(xrStatus, statusField); hasData {
 			f.log.Info("Target already has data, skipping query", "target", in.Target)
 
@@ -187,6 +199,8 @@ func (f *Function) checkStatusTargetHasData(req *fnv1.RunFunctionRequest, in *v1
 			return true
 		}
 	}
+
+	// If we got here, either there was an error or the field doesn't have data
 	return false
 }
 
@@ -530,4 +544,59 @@ func targetHasData(data map[string]interface{}, key string) (bool, error) {
 
 	// For other types (numbers, booleans), consider them as having data
 	return true, nil
+}
+
+// propagateDesiredXR ensures the desired XR is properly propagated without changing existing data
+func (f *Function) propagateDesiredXR(req *fnv1.RunFunctionRequest, rsp *fnv1.RunFunctionResponse) error {
+	oxr, err := request.GetObservedCompositeResource(req)
+	if err != nil {
+		response.Fatal(rsp, errors.Wrap(err, "cannot get observed composite resource"))
+		return err
+	}
+
+	// The composite resource desired by previous functions in the pipeline
+	dxr, err := request.GetDesiredCompositeResource(req)
+	if err != nil {
+		response.Fatal(rsp, errors.Wrap(err, "cannot get desired composite resource"))
+		return err
+	}
+
+	// If dxr is empty, initialize it from oxr
+	if dxr.Resource.GetKind() == "" {
+		f.log.Info("Initializing Desired XR from Observed XR")
+		dxr.Resource.SetAPIVersion(oxr.Resource.GetAPIVersion())
+		dxr.Resource.SetKind(oxr.Resource.GetKind())
+		dxr.Resource.SetName(oxr.Resource.GetName())
+
+		// Copy status from observed XR
+		xrStatus := make(map[string]interface{})
+		err = oxr.Resource.GetValueInto("status", &xrStatus)
+		if err == nil && len(xrStatus) > 0 {
+			f.log.Info("Copying status from Observed XR to Desired XR")
+			if err := dxr.Resource.SetValue("status", xrStatus); err != nil {
+				f.log.Info("Error setting status in Desired XR", "error", err)
+				return err
+			}
+		}
+	}
+
+	// Save the desired XR in the response
+	if err := response.SetDesiredCompositeResource(rsp, dxr); err != nil {
+		response.Fatal(rsp, errors.Wrapf(err, "cannot set desired composite resource in %T", rsp))
+		return err
+	}
+
+	f.log.Info("Successfully propagated Desired XR")
+	return nil
+}
+
+// preserveContext ensures the context is preserved in the response
+func (f *Function) preserveContext(req *fnv1.RunFunctionRequest, rsp *fnv1.RunFunctionResponse) {
+	// Get the existing context from the request
+	existingContext := req.GetContext()
+	if existingContext != nil {
+		// Copy the existing context to the response
+		rsp.Context = existingContext
+		f.log.Info("Preserved existing context in response")
+	}
 }
