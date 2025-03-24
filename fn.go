@@ -283,6 +283,7 @@ func getCreds(req *fnv1.RunFunctionRequest) (map[string]string, error) {
 // that interacts with Azure Resource Graph API.
 type AzureQuery struct{}
 
+// azQuery is a concrete implementation that interacts with Azure Resource Graph API.
 func (a *AzureQuery) azQuery(ctx context.Context, azureCreds map[string]string, in *v1beta1.Input) (armresourcegraph.ClientResourcesResponse, error) {
 	tenantID := azureCreds["tenantId"]
 	clientID := azureCreds["clientId"]
@@ -307,7 +308,12 @@ func (a *AzureQuery) azQuery(ctx context.Context, azureCreds map[string]string, 
 		Query: to.Ptr(in.Query),
 	}
 
-	if len(subscriptionID) > 0 {
+	// Handle subscriptions in the following priority:
+	// 1. Use Subscriptions field from Input if provided
+	// 2. Otherwise use the subscriptionID from creds if available
+	if len(in.Subscriptions) > 0 {
+		queryRequest.Subscriptions = in.Subscriptions
+	} else if len(subscriptionID) > 0 {
 		queryRequest.Subscriptions = []*string{to.Ptr(subscriptionID)}
 	}
 

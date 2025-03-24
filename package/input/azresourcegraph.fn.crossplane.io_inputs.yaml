@@ -57,6 +57,12 @@ spec:
               SkipQueryWhenTargetHasData controls whether to skip the query when the target already has data
               Default is false to ensure continuous reconciliation
             type: boolean
+          subscriptions:
+            description: 'Azure subscriptions against which to execute the query.
+              Example: [ ''sub1'',''sub2'' ]'
+            items:
+              type: string
+            type: array
           target:
             description: Target where to store the Query Result
             type: string

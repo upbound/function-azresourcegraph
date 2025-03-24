@@ -35,6 +35,10 @@ type Input struct {
 	// +optional
 	ManagementGroups []*string `json:"managementGroups,omitempty"`
 
+	// Azure subscriptions against which to execute the query. Example: [ 'sub1','sub2' ]
+	// +optional
+	Subscriptions []*string `json:"subscriptions,omitempty"`
+
 	// Target where to store the Query Result
 	Target string `json:"target"`
 

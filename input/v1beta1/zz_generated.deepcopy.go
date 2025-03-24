@@ -29,6 +29,17 @@ func (in *Input) DeepCopyInto(out *Input) {
 			}
 		}
 	}
+	if in.Subscriptions != nil {
+		in, out := &in.Subscriptions, &out.Subscriptions
+		*out = make([]*string, len(*in))
+		for i := range *in {
+			if (*in)[i] != nil {
+				in, out := &(*in)[i], &(*out)[i]
+				*out = new(string)
+				**out = **in
+			}
+		}
+	}
 	if in.SkipQueryWhenTargetHasData != nil {
 		in, out := &in.SkipQueryWhenTargetHasData, &out.SkipQueryWhenTargetHasData
 		*out = new(bool)
