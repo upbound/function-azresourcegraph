@@ -1,0 +1,55 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xrs.example.crossplane.io
+spec:
+  group: example.crossplane.io
+  names:
+    categories:
+    - crossplane
+    kind: XR
+    plural: xrs
+  versions:
+  - name: v1
+    referenceable: true
+    schema:
+      openAPIV3Schema:
+        description: XR is the Schema for the XR API.
+        properties:
+          spec:
+            description: XRSpec defines the desired state of XR.
+            type: object
+            properties:
+              queryResourceType:
+                description: resource type for az resource query construction
+                type: string
+          status:
+            description: XRStatus defines the observed state of XR.
+            type: object
+            properties:
+              azResourceGraphQueryResult:
+                description: Freeform field containing query results from function-azresourcegraph
+                type: array
+                items:
+                  type: object
+                x-kubernetes-preserve-unknown-fields: true
+              azResourceGraphQuery:
+                description: Freeform field containing query results from function-azresourcegraph
+                type: string
+              subscriptions:
+                description: Field to dynamically propagate subscriptions IDs
+                type: array
+                items:
+                  type: string
+        required:
+        - spec
+        type: object
+    served: true
+status:
+  controllers:
+    compositeResourceClaimType:
+      apiVersion: ""
+      kind: ""
+    compositeResourceType:
+      apiVersion: ""
+      kind: ""

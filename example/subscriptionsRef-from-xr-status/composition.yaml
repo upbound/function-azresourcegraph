@@ -1,0 +1,40 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: function-azresourcegraph
+spec:
+  compositeTypeRef:
+    apiVersion: example.crossplane.io/v1
+    kind: XR
+  mode: Pipeline
+  pipeline:
+    - step: query-to-status
+      functionRef:
+        name: function-go-templating
+      input:
+        apiVersion: gotemplating.fn.crossplane.io/v1beta1
+        kind: GoTemplate
+        source: Inline
+        inline:
+          template: |
+            apiVersion: example.crossplane.io/v1
+            kind: XR
+            status:
+              subscriptions:
+                - 00000000-0000-0000-0000-000000000001
+                - 00000000-0000-0000-0000-000000000002
+    - step: query-azresourcegraph
+      functionRef:
+        name: function-azresourcegraph
+      input:
+        apiVersion: azresourcegraph.fn.crossplane.io/v1beta1
+        kind: Input
+        query: "Resources | project name, location, type, id| where type =~ 'Microsoft.Compute/virtualMachines' | order by name desc"
+        target: "status.azResourceGraphQueryResult"
+        subscriptionsRef: status.subscriptions
+      credentials:
+        - name: azure-creds
+          source: Secret
+          secretRef:
+            namespace: upbound-system
+            name: azure-account-creds
