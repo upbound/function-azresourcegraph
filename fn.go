@@ -17,6 +17,7 @@ import (
 	"github.com/crossplane/crossplane-runtime/pkg/logging"
 	fnv1 "github.com/crossplane/function-sdk-go/proto/v1"
 	"github.com/crossplane/function-sdk-go/request"
+	"github.com/crossplane/function-sdk-go/resource"
 	"github.com/crossplane/function-sdk-go/response"
 )
 
@@ -183,16 +184,64 @@ func (f *Function) resolveSubscriptions(req *fnv1.RunFunctionRequest, in *v1beta
 	return nil
 }
 
-// getSubscriptionsFromStatus gets subscriptions from the XR status
-func (f *Function) getSubscriptionsFromStatus(req *fnv1.RunFunctionRequest, in *v1beta1.Input) error {
+// getXRAndStatus retrieves status and desired XR, handling initialization if needed
+func (f *Function) getXRAndStatus(req *fnv1.RunFunctionRequest) (map[string]interface{}, *resource.Composite, error) {
+	// Get both observed and desired XR
 	oxr, err := request.GetObservedCompositeResource(req)
 	if err != nil {
-		return errors.Wrap(err, "cannot get observed composite resource")
+		return nil, nil, errors.Wrap(err, "cannot get observed composite resource")
 	}
+
+	dxr, err := request.GetDesiredCompositeResource(req)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "cannot get desired composite resource")
+	}
+
 	xrStatus := make(map[string]interface{})
+
+	// Initialize dxr from oxr if needed
+	if dxr.Resource.GetKind() == "" {
+		dxr.Resource.SetAPIVersion(oxr.Resource.GetAPIVersion())
+		dxr.Resource.SetKind(oxr.Resource.GetKind())
+		dxr.Resource.SetName(oxr.Resource.GetName())
+	}
+
+	// First try to get status from desired XR (pipeline changes)
+	if dxr.Resource.GetKind() != "" {
+		err = dxr.Resource.GetValueInto("status", &xrStatus)
+		if err == nil && len(xrStatus) > 0 {
+			return xrStatus, dxr, nil
+		}
+		f.log.Debug("Cannot get status from Desired XR or it's empty")
+	}
+
+	// Fallback to observed XR status
 	err = oxr.Resource.GetValueInto("status", &xrStatus)
 	if err != nil {
-		return errors.Wrap(err, "cannot get XR status")
+		f.log.Debug("Cannot get status from Observed XR")
+	}
+
+	return xrStatus, dxr, nil
+}
+
+// getQueryFromStatus gets query from the XR status
+func (f *Function) getQueryFromStatus(req *fnv1.RunFunctionRequest, in *v1beta1.Input) error {
+	xrStatus, _, err := f.getXRAndStatus(req)
+	if err != nil {
+		return err
+	}
+
+	if queryFromXRStatus, ok := GetNestedKey(xrStatus, strings.TrimPrefix(*in.QueryRef, "status.")); ok {
+		in.Query = queryFromXRStatus
+	}
+	return nil
+}
+
+// getSubscriptionsFromStatus gets subscriptions from the XR status
+func (f *Function) getSubscriptionsFromStatus(req *fnv1.RunFunctionRequest, in *v1beta1.Input) error {
+	xrStatus, _, err := f.getXRAndStatus(req)
+	if err != nil {
+		return err
 	}
 
 	if subsFromStatus, ok := xrStatus[strings.TrimPrefix(*in.SubscriptionsRef, "status.")]; ok {
@@ -208,26 +257,9 @@ func (f *Function) getSubscriptionsFromStatus(req *fnv1.RunFunctionRequest, in *
 	return nil
 }
 
-// getQueryFromStatus gets query from the XR status
-func (f *Function) getQueryFromStatus(req *fnv1.RunFunctionRequest, in *v1beta1.Input) error {
-	oxr, err := request.GetObservedCompositeResource(req)
-	if err != nil {
-		return errors.Wrap(err, "cannot get observed composite resource")
-	}
-	xrStatus := make(map[string]interface{})
-	err = oxr.Resource.GetValueInto("status", &xrStatus)
-	if err != nil {
-		return errors.Wrap(err, "cannot get XR status")
-	}
-	if queryFromXRStatus, ok := GetNestedKey(xrStatus, strings.TrimPrefix(*in.QueryRef, "status.")); ok {
-		in.Query = queryFromXRStatus
-	}
-	return nil
-}
-
 // checkStatusTargetHasData checks if the status target has data.
 func (f *Function) checkStatusTargetHasData(req *fnv1.RunFunctionRequest, in *v1beta1.Input, rsp *fnv1.RunFunctionResponse) bool {
-	xrStatus, err := f.getXRStatus(req)
+	xrStatus, _, err := f.getXRAndStatus(req)
 	if err != nil {
 		response.Fatal(rsp, err)
 		return true
@@ -437,31 +469,9 @@ func SetNestedKey(root map[string]interface{}, key string, value interface{}) er
 
 // putQueryResultToStatus processes the query results to status
 func (f *Function) putQueryResultToStatus(req *fnv1.RunFunctionRequest, rsp *fnv1.RunFunctionResponse, in *v1beta1.Input, results armresourcegraph.ClientResourcesResponse) error {
-	oxr, err := request.GetObservedCompositeResource(req)
+	xrStatus, dxr, err := f.getXRAndStatus(req)
 	if err != nil {
-		return errors.Wrap(err, "cannot get observed composite resource")
-	}
-	// The composite resource desired by previous functions in the pipeline.
-	dxr, err := request.GetDesiredCompositeResource(req)
-	if err != nil {
-		return errors.Wrap(err, "cannot get desired composite resource")
-	}
-	xrStatus := make(map[string]interface{})
-	// Use Desired XR from previous pipeline as the current status
-	// Otherwise get status from Observed XR
-	if dxr.Resource.GetKind() != "" {
-		err = dxr.Resource.GetValueInto("status", &xrStatus)
-		if err != nil {
-			f.log.Debug("Cannot get status from XR")
-		}
-	} else {
-		dxr.Resource.SetAPIVersion(oxr.Resource.GetAPIVersion())
-		dxr.Resource.SetKind(oxr.Resource.GetKind())
-
-		err = oxr.Resource.GetValueInto("status", &xrStatus)
-		if err != nil {
-			f.log.Debug("Cannot get status from XR")
-		}
+		return err
 	}
 
 	// Update the specific status field
@@ -563,35 +573,17 @@ func targetHasData(data map[string]interface{}, key string) (bool, error) {
 
 // propagateDesiredXR ensures the desired XR is properly propagated without changing existing data
 func (f *Function) propagateDesiredXR(req *fnv1.RunFunctionRequest, rsp *fnv1.RunFunctionResponse) error {
-	oxr, err := request.GetObservedCompositeResource(req)
+	xrStatus, dxr, err := f.getXRAndStatus(req)
 	if err != nil {
-		response.Fatal(rsp, errors.Wrap(err, "cannot get observed composite resource"))
+		response.Fatal(rsp, err)
 		return err
 	}
 
-	// The composite resource desired by previous functions in the pipeline
-	dxr, err := request.GetDesiredCompositeResource(req)
-	if err != nil {
-		response.Fatal(rsp, errors.Wrap(err, "cannot get desired composite resource"))
-		return err
-	}
-
-	// If dxr is empty, initialize it from oxr
-	if dxr.Resource.GetKind() == "" {
-		f.log.Info("Initializing Desired XR from Observed XR")
-		dxr.Resource.SetAPIVersion(oxr.Resource.GetAPIVersion())
-		dxr.Resource.SetKind(oxr.Resource.GetKind())
-		dxr.Resource.SetName(oxr.Resource.GetName())
-
-		// Copy status from observed XR
-		xrStatus := make(map[string]interface{})
-		err = oxr.Resource.GetValueInto("status", &xrStatus)
-		if err == nil && len(xrStatus) > 0 {
-			f.log.Info("Copying status from Observed XR to Desired XR")
-			if err := dxr.Resource.SetValue("status", xrStatus); err != nil {
-				f.log.Info("Error setting status in Desired XR", "error", err)
-				return err
-			}
+	// Write any existing status back to dxr
+	if len(xrStatus) > 0 {
+		if err := dxr.Resource.SetValue("status", xrStatus); err != nil {
+			f.log.Info("Error setting status in Desired XR", "error", err)
+			return err
 		}
 	}
 
@@ -614,38 +606,6 @@ func (f *Function) preserveContext(req *fnv1.RunFunctionRequest, rsp *fnv1.RunFu
 		rsp.Context = existingContext
 		f.log.Info("Preserved existing context in response")
 	}
-}
-
-// getXRStatus retrieves status from XR, prioritizing dxr over oxr
-func (f *Function) getXRStatus(req *fnv1.RunFunctionRequest) (map[string]interface{}, error) {
-	// Get both observed and desired XR
-	oxr, err := request.GetObservedCompositeResource(req)
-	if err != nil {
-		return nil, errors.Wrap(err, "cannot get observed composite resource")
-	}
-
-	dxr, err := request.GetDesiredCompositeResource(req)
-	if err != nil {
-		return nil, errors.Wrap(err, "cannot get desired composite resource")
-	}
-
-	xrStatus := make(map[string]interface{})
-
-	// First try to get status from desired XR (pipeline changes)
-	if dxr.Resource.GetKind() != "" {
-		err = dxr.Resource.GetValueInto("status", &xrStatus)
-		if err == nil && len(xrStatus) > 0 {
-			return xrStatus, nil
-		}
-	}
-
-	// Fallback to observed XR status
-	err = oxr.Resource.GetValueInto("status", &xrStatus)
-	if err != nil {
-		f.log.Debug("Cannot get status from XR")
-	}
-
-	return xrStatus, nil
 }
 
 // isValidTarget checks if the target is valid

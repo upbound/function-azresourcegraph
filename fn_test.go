@@ -175,6 +175,9 @@ func TestRunFunction(t *testing.T) {
 							Resource: resource.MustStructJSON(`{
 								"apiVersion": "example.org/v1",
 								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
 								"status": {
 									"azResourceGraphQueryResult":
 										{
@@ -234,6 +237,9 @@ func TestRunFunction(t *testing.T) {
 							Resource: resource.MustStructJSON(`{
 								"apiVersion": "example.org/v1",
 								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
 								"status": {
 									"nestedField": {
 										"azResourceGraphQueryResult":
@@ -295,6 +301,9 @@ func TestRunFunction(t *testing.T) {
 							Resource: resource.MustStructJSON(`{
 								"apiVersion": "example.org/v1",
 								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
 								"status": {
 									"strange.nested.field.with.dots": {
 										"azResourceGraphQueryResult":
@@ -1190,6 +1199,9 @@ func TestRunFunction(t *testing.T) {
 							Resource: resource.MustStructJSON(`{
 								"apiVersion": "example.org/v1",
 								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
 								"status": {
 									"nestedField": {
 										"azResourceGraphQueryResult":
@@ -1512,6 +1524,9 @@ func TestRunFunction(t *testing.T) {
 							Resource: resource.MustStructJSON(`{
 								"apiVersion": "example.org/v1",
 								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
 								"status": {
 									"azResourceGraphQueryResult":
 										{
@@ -1571,6 +1586,9 @@ func TestRunFunction(t *testing.T) {
 							Resource: resource.MustStructJSON(`{
 								"apiVersion": "example.org/v1",
 								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
 								"status": {
 									"azResourceGraphQueryResult":
 										{
@@ -1636,6 +1654,9 @@ func TestRunFunction(t *testing.T) {
 							Resource: resource.MustStructJSON(`{
 								"apiVersion": "example.org/v1",
 								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
 								"status": {
 									"azResourceGraphQueryResult":
 										{
