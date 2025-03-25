@@ -58,6 +58,11 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 		return rsp, nil //nolint:nilerr // errors are handled in rsp. We should not error main function and proceed with reconciliation
 	}
 
+	// Get subscriptions from reference if specified
+	if err := f.resolveSubscriptions(req, in, rsp); err != nil {
+		return rsp, nil //nolint:nilerr // errors are handled in rsp. We should not error main function and proceed with reconciliation
+	}
+
 	// Check if query is empty
 	if in.Query == "" {
 		response.Warning(rsp, errors.New("Query is empty"))
@@ -143,6 +148,64 @@ func (f *Function) resolveQuery(req *fnv1.RunFunctionRequest, in *v1beta1.Input,
 	default:
 		response.Fatal(rsp, errors.Errorf("Unrecognized QueryRef field: %s", *in.QueryRef))
 		return errors.New("unrecognized QueryRef field")
+	}
+	return nil
+}
+
+// resolveSubscriptions resolves the subscriptions from a reference if specified.
+func (f *Function) resolveSubscriptions(req *fnv1.RunFunctionRequest, in *v1beta1.Input, rsp *fnv1.RunFunctionResponse) error {
+	if in.SubscriptionsRef == nil {
+		return nil
+	}
+
+	switch {
+	case strings.HasPrefix(*in.SubscriptionsRef, "status."):
+		if err := getSubscriptionsFromStatus(req, in); err != nil {
+			response.Fatal(rsp, err)
+			return err
+		}
+	case strings.HasPrefix(*in.SubscriptionsRef, "context."):
+		functionContext := req.GetContext().AsMap()
+		if subsFromContext, ok := functionContext[strings.TrimPrefix(*in.SubscriptionsRef, "context.")]; ok {
+			// Handle array of strings directly
+			if subsArray, ok := subsFromContext.([]interface{}); ok {
+				in.Subscriptions = make([]*string, len(subsArray))
+				for i, sub := range subsArray {
+					if strSub, ok := sub.(string); ok {
+						in.Subscriptions[i] = to.Ptr(strSub)
+					}
+				}
+			}
+		}
+	default:
+		response.Fatal(rsp, errors.Errorf("Unrecognized SubscriptionsRef field: %s", *in.SubscriptionsRef))
+		return errors.New("unrecognized SubscriptionsRef field")
+	}
+	return nil
+}
+
+func getSubscriptionsFromStatus(req *fnv1.RunFunctionRequest, in *v1beta1.Input) error {
+	oxr, err := request.GetObservedCompositeResource(req)
+	if err != nil {
+		return errors.Wrap(err, "cannot get observed composite resource")
+	}
+	xrStatus := make(map[string]interface{})
+	err = oxr.Resource.GetValueInto("status", &xrStatus)
+	if err != nil {
+		return errors.Wrap(err, "cannot get XR status")
+	}
+
+	statusKey := strings.TrimPrefix(*in.SubscriptionsRef, "status.")
+	if subsFromStatus, ok := xrStatus[statusKey]; ok {
+		// Handle array of strings directly
+		if subsArray, ok := subsFromStatus.([]interface{}); ok {
+			in.Subscriptions = make([]*string, len(subsArray))
+			for i, sub := range subsArray {
+				if strSub, ok := sub.(string); ok {
+					in.Subscriptions[i] = to.Ptr(strSub)
+				}
+			}
+		}
 	}
 	return nil
 }

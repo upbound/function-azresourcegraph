@@ -39,6 +39,11 @@ type Input struct {
 	// +optional
 	Subscriptions []*string `json:"subscriptions,omitempty"`
 
+	// Reference to retrieve the subscriptions (e.g., from status or context)
+	// Overrides Subscriptions field if used
+	// +optional
+	SubscriptionsRef *string `json:"subscriptionsRef,omitempty"`
+
 	// Target where to store the Query Result
 	Target string `json:"target"`
 
