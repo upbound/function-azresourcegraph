@@ -63,6 +63,11 @@ spec:
             items:
               type: string
             type: array
+          subscriptionsRef:
+            description: |-
+              Reference to retrieve the subscriptions (e.g., from status or context)
+              Overrides Subscriptions field if used
+            type: string
           target:
             description: Target where to store the Query Result
             type: string

@@ -40,6 +40,11 @@ func (in *Input) DeepCopyInto(out *Input) {
 			}
 		}
 	}
+	if in.SubscriptionsRef != nil {
+		in, out := &in.SubscriptionsRef, &out.SubscriptionsRef
+		*out = new(string)
+		**out = **in
+	}
 	if in.SkipQueryWhenTargetHasData != nil {
 		in, out := &in.SkipQueryWhenTargetHasData, &out.SkipQueryWhenTargetHasData
 		*out = new(bool)
