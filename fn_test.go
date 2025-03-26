@@ -1733,6 +1733,146 @@ func TestRunFunction(t *testing.T) {
 				},
 			},
 		},
+		"CanGetSubscriptionsFromNestedStatus": {
+			reason: "The Function should be able to get subscriptions from nested status field using dot notation",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"subscriptionsRef": "status.nested.field.subscriptionsList",
+						"target": "status.azResourceGraphQueryResult"
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"status": {
+									"nested": {
+										"field": {
+											"subscriptionsList": ["sub1", "sub2", "sub3"]
+										}
+									}
+								}}`),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:   "FunctionSuccess",
+							Status: fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason: "Success",
+							Target: fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_NORMAL,
+							Message:  `Query: "Resources| count"`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"status": {
+									"nested": {
+										"field": {
+											"subscriptionsList": ["sub1", "sub2", "sub3"]
+										}
+									},
+									"azResourceGraphQueryResult": {
+										"resource": "mock-resource"
+									}
+								}}`),
+						},
+					},
+				},
+			},
+		},
+		"CanGetSubscriptionsFromBracketStatus": {
+			reason: "The Function should be able to get subscriptions from status field using bracket notation",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"subscriptionsRef": "status.[complex.field.with.dots].subscriptionsList",
+						"target": "status.azResourceGraphQueryResult"
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"status": {
+									"complex.field.with.dots": {
+										"subscriptionsList": ["sub1", "sub2", "sub3"]
+									}
+								}}`),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:   "FunctionSuccess",
+							Status: fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason: "Success",
+							Target: fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_NORMAL,
+							Message:  `Query: "Resources| count"`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"status": {
+									"complex.field.with.dots": {
+										"subscriptionsList": ["sub1", "sub2", "sub3"]
+									},
+									"azResourceGraphQueryResult": {
+										"resource": "mock-resource"
+									}
+								}}`),
+						},
+					},
+				},
+			},
+		},
 	}
 
 	for name, tc := range cases {
