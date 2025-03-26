@@ -125,6 +125,30 @@ using the optional `skipQueryWhenTargetHasData` flag:
 
 Use this option carefully, as it may lead to stale query results over time.
 
+## Explicit Subscriptions scope
+
+It is possible to specify explicit subscriptions scope and override the one that
+is coming from credentials
+
+```yaml
+      kind: Input
+      query: "Resources | project name, location, type, id| where type =~ 'Microsoft.Compute/virtualMachines' | order by name desc"
+      subscriptions:
+        - 00000000-0000-0000-0000-000000000001
+        - 00000000-0000-0000-0000-000000000002
+      target: "status.azResourceGraphQueryResult"
+```
+
+There is also possible to use references from status and context.
+
+
+```yaml
+subscriptionsRef: status.subscriptions
+```
+
+```yaml
+subscriptionsRef: "context.[apiextensions.crossplane.io/environment].subscriptions"
+```
 
 [azresourcegraph]: https://learn.microsoft.com/en-us/azure/governance/resource-graph/
 [azop]: https://marketplace.upbound.io/providers/upbound/provider-family-azure/latest
