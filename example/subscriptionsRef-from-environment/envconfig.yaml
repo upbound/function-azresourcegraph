@@ -1,0 +1,9 @@
+apiVersion: apiextensions.crossplane.io/v1alpha1
+kind: EnvironmentConfig
+metadata:
+  name: example-config
+data:
+  azResourceGraphQuery: "Resources|count"
+  subscriptions:
+    - 00000000-0000-0000-0000-000000000001
+    - 00000000-0000-0000-0000-000000000002

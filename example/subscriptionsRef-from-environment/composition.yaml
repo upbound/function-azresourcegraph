@@ -1,0 +1,36 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: function-azresourcegraph
+spec:
+  compositeTypeRef:
+    apiVersion: example.crossplane.io/v1
+    kind: XR
+  mode: Pipeline
+  pipeline:
+  - step: environmentConfigs
+    functionRef:
+      name: crossplane-contrib-function-environment-configs
+    input:
+      apiVersion: environmentconfigs.fn.crossplane.io/v1beta1
+      kind: Input
+      spec:
+        environmentConfigs:
+          - type: Reference
+            ref:
+              name: example-config
+  - step: query-azresourcegraph
+    functionRef:
+      name: function-azresourcegraph
+    input:
+      apiVersion: azresourcegraph.fn.crossplane.io/v1beta1
+      kind: Input
+      queryRef: "context.[apiextensions.crossplane.io/environment].azResourceGraphQuery"
+      subscriptionsRef: "context.[apiextensions.crossplane.io/environment].subscriptions"
+      target: "status.azResourceGraphQueryResult"
+    credentials:
+      - name: azure-creds
+        source: Secret
+        secretRef:
+          namespace: upbound-system
+          name: azure-account-creds

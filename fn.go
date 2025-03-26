@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/crossplane/crossplane-runtime/pkg/errors"
+	"github.com/crossplane/crossplane-runtime/pkg/fieldpath"
 	"github.com/crossplane/crossplane-runtime/pkg/logging"
 	fnv1 "github.com/crossplane/function-sdk-go/proto/v1"
 	"github.com/crossplane/function-sdk-go/request"
@@ -167,10 +168,12 @@ func (f *Function) resolveSubscriptions(req *fnv1.RunFunctionRequest, in *v1beta
 		}
 	case strings.HasPrefix(*in.SubscriptionsRef, "context."):
 		functionContext := req.GetContext().AsMap()
-		if subsFromContext, ok := functionContext[strings.TrimPrefix(*in.SubscriptionsRef, "context.")]; ok {
-			if subsArray, ok := subsFromContext.([]interface{}); ok {
-				in.Subscriptions = make([]*string, len(subsArray))
-				for i, sub := range subsArray {
+		paved := fieldpath.Pave(functionContext)
+		value, err := paved.GetValue(strings.TrimPrefix(*in.SubscriptionsRef, "context."))
+		if err == nil && value != nil {
+			if arr, ok := value.([]interface{}); ok {
+				in.Subscriptions = make([]*string, len(arr))
+				for i, sub := range arr {
 					if strSub, ok := sub.(string); ok {
 						in.Subscriptions[i] = to.Ptr(strSub)
 					}
@@ -244,10 +247,12 @@ func (f *Function) getSubscriptionsFromStatus(req *fnv1.RunFunctionRequest, in *
 		return err
 	}
 
-	if subsFromStatus, ok := xrStatus[strings.TrimPrefix(*in.SubscriptionsRef, "status.")]; ok {
-		if subsArray, ok := subsFromStatus.([]interface{}); ok {
-			in.Subscriptions = make([]*string, len(subsArray))
-			for i, sub := range subsArray {
+	paved := fieldpath.Pave(xrStatus)
+	value, err := paved.GetValue(strings.TrimPrefix(*in.SubscriptionsRef, "status."))
+	if err == nil && value != nil {
+		if arr, ok := value.([]interface{}); ok {
+			in.Subscriptions = make([]*string, len(arr))
+			for i, sub := range arr {
 				if strSub, ok := sub.(string); ok {
 					in.Subscriptions[i] = to.Ptr(strSub)
 				}
