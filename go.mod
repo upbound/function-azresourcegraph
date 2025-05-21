@@ -9,7 +9,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.8.2
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resourcegraph/armresourcegraph v0.9.0
 	github.com/alecthomas/kong v1.10.0
-	github.com/crossplane/crossplane-runtime v1.19.0
+	github.com/crossplane/crossplane-runtime v1.20.0
 	github.com/crossplane/function-sdk-go v0.4.0
 	github.com/google/go-cmp v0.7.0
 	google.golang.org/protobuf v1.36.6
@@ -59,8 +59,8 @@ require (
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/crypto v0.36.0 // indirect
 	golang.org/x/mod v0.23.0 // indirect
-	golang.org/x/net v0.37.0 // indirect
-	golang.org/x/oauth2 v0.23.0 // indirect
+	golang.org/x/net v0.38.0 // indirect
+	golang.org/x/oauth2 v0.27.0 // indirect
 	golang.org/x/sync v0.12.0 // indirect
 	golang.org/x/sys v0.31.0 // indirect
 	golang.org/x/term v0.30.0 // indirect
