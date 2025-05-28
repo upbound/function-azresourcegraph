@@ -2780,7 +2780,7 @@ func TestRunFunction(t *testing.T) {
 					t.Errorf("%s\n%v", tc.reason, err)
 					return
 				}
-				
+
 				// Additional validation for backwards compatibility test
 				if name == "ShouldAddTimestampToMapResultsOnly" {
 					if err := validateBackwardsCompatibility(rsp); err != nil {
@@ -2803,7 +2803,7 @@ func TestRunFunction(t *testing.T) {
 }
 
 func validateLastQueryTimeInResponse(rsp *fnv1.RunFunctionResponse, testName string) error {
-	if rsp.Desired == nil || rsp.Desired.Composite == nil {
+	if rsp.GetDesired() == nil || rsp.GetDesired().GetComposite() == nil {
 		return fmt.Errorf("missing desired composite resource")
 	}
 
@@ -2814,11 +2814,11 @@ func validateLastQueryTimeInResponse(rsp *fnv1.RunFunctionResponse, testName str
 	}
 
 	// Get status from the resource
-	statusValue, exists := rsp.Desired.Composite.Resource.Fields["status"]
+	statusValue, exists := rsp.GetDesired().GetComposite().GetResource().GetFields()["status"]
 	if !exists {
 		return fmt.Errorf("missing status field")
 	}
-	
+
 	status := statusValue.GetStructValue().AsMap()
 
 	// Get the target data directly
@@ -2850,25 +2850,25 @@ func validateLastQueryTimeInResponse(rsp *fnv1.RunFunctionResponse, testName str
 
 	// Validate timestamp format
 	if _, err := time.Parse(time.RFC3339, lastQueryTimeStr); err != nil {
-		return fmt.Errorf("invalid lastQueryTime format: %v", err)
+		return fmt.Errorf("invalid lastQueryTime format: %w", err)
 	}
 
 	return nil
 }
 
 func validateBackwardsCompatibility(rsp *fnv1.RunFunctionResponse) error {
-	if rsp.Desired == nil || rsp.Desired.Composite == nil {
+	if rsp.GetDesired() == nil || rsp.GetDesired().GetComposite() == nil {
 		return fmt.Errorf("missing desired composite resource")
 	}
 
 	// Get status from the resource
-	statusValue, exists := rsp.Desired.Composite.Resource.Fields["status"]
+	statusValue, exists := rsp.GetDesired().GetComposite().GetResource().GetFields()["status"]
 	if !exists {
 		return fmt.Errorf("missing status field")
 	}
-	
+
 	status := statusValue.GetStructValue().AsMap()
-	
+
 	// Get the query result
 	targetData, ok := status["azResourceGraphQueryResult"]
 	if !ok {
