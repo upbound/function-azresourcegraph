@@ -16,7 +16,7 @@ spec:
       kind: Input
       # Large query that might return partial results due to API limits
       query: |
-        Resources 
+        Resources
         | project name, location, type, id, resourceGroup, subscriptionId, tags
         | where type in ('Microsoft.Compute/virtualMachines', 'Microsoft.Storage/storageAccounts', 'Microsoft.Network/virtualNetworks')
         | order by name desc
@@ -38,7 +38,7 @@ spec:
       apiVersion: azresourcegraph.fn.crossplane.io/v1beta1
       kind: Input
       query: |
-        Resources 
+        Resources
         | where type =~ 'Microsoft.Compute/virtualMachines'
         | project name, location, properties.hardwareProfile.vmSize, properties.storageProfile.osDisk.osType
         | order by name desc
