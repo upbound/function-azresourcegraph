@@ -1,0 +1,7 @@
+---
+apiVersion: pkg.crossplane.io/v1beta1
+kind: Function
+metadata:
+  name: function-azresourcegraph
+spec:
+  package: xpkg.upbound.io/upbound/function-azresourcegraph:v0.8.0

@@ -14,6 +14,20 @@ streamline rendering Crossplane compositions.
 To enable a successful query, update `secrets/azure-creds.yaml` with
 your valid Azure credentials.
 
+## Periodic Query Examples
+
+The function now supports periodic queries to handle Azure Resource Graph API throttling and partial data scenarios. Use the `queryIntervalMinutes` parameter to limit query frequency:
+
+- **periodic-query-example/**: Basic periodic query setup with 15-minute intervals
+- **throttling-prevention-example/**: Advanced example showing multiple queries with different intervals to prevent throttling
+
+### Key Features
+
+- **Throttling Prevention**: Automatically limits query frequency to avoid Azure API rate limits
+- **Partial Data Handling**: Allows queries to run periodically until complete data is obtained
+- **Flexible Intervals**: Configure different intervals for different queries based on complexity
+- **Backward Compatible**: Existing compositions work unchanged
+
 ## Example
 
 For instance, the static-query-to-context-field directory demonstrates how to use a static query to populate a specific context field.

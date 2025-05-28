@@ -1,0 +1,35 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xrs.example.crossplane.io
+spec:
+  group: example.crossplane.io
+  names:
+    kind: XR
+    plural: xrs
+  claimNames:
+    kind: XRClaim
+    plural: xrclaims
+  versions:
+  - name: v1
+    served: true
+    referenceable: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            properties:
+              count:
+                type: integer
+                default: 1
+          status:
+            type: object
+            properties:
+              allResources:
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
+              vmDetails:
+                type: object
+                x-kubernetes-preserve-unknown-fields: true

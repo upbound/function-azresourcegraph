@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -479,11 +480,27 @@ func (f *Function) putQueryResultToStatus(req *fnv1.RunFunctionRequest, rsp *fnv
 		return err
 	}
 
+	// Prepare the result data with timestamp if interval is configured
+	resultData := results.Data
+	if in.QueryIntervalMinutes != nil && *in.QueryIntervalMinutes > 0 {
+		// Only add lastQueryTime if the result is already a map (preserves backwards compatibility)
+		if dataMap, ok := resultData.(map[string]interface{}); ok {
+			dataMap["lastQueryTime"] = time.Now().Format(time.RFC3339)
+			f.log.Debug("Added lastQueryTime to query result", "target", in.Target, "queryIntervalMinutes", *in.QueryIntervalMinutes)
+		} else {
+			// If results.Data is not a map (primitive/array), we cannot add timestamp without breaking compatibility
+			f.log.Debug("Cannot add lastQueryTime to non-map result data, skipping timestamp", 
+				"target", in.Target, 
+				"resultType", fmt.Sprintf("%T", resultData),
+				"queryIntervalMinutes", *in.QueryIntervalMinutes)
+		}
+	}
+
 	// Update the specific status field
 	statusField := strings.TrimPrefix(in.Target, "status.")
-	err = SetNestedKey(xrStatus, statusField, results.Data)
+	err = SetNestedKey(xrStatus, statusField, resultData)
 	if err != nil {
-		return errors.Wrapf(err, "cannot set status field %s to %v", statusField, results.Data)
+		return errors.Wrapf(err, "cannot set status field %s to %v", statusField, resultData)
 	}
 
 	// Write the updated status field back into the composite resource
@@ -620,6 +637,11 @@ func (f *Function) isValidTarget(target string) bool {
 
 // shouldSkipQuery checks if the query should be skipped.
 func (f *Function) shouldSkipQuery(req *fnv1.RunFunctionRequest, in *v1beta1.Input, rsp *fnv1.RunFunctionResponse) bool {
+	// Check interval-based skipping first
+	if f.shouldSkipQueryDueToInterval(req, in, rsp) {
+		return true
+	}
+
 	// Determine if we should skip the query when target has data
 	var shouldSkipQueryWhenTargetHasData = false // Default to false to ensure continuous reconciliation
 	if in.SkipQueryWhenTargetHasData != nil {
@@ -635,6 +657,78 @@ func (f *Function) shouldSkipQuery(req *fnv1.RunFunctionRequest, in *v1beta1.Inp
 		return f.checkStatusTargetHasData(req, in, rsp)
 	case strings.HasPrefix(in.Target, "context."):
 		return f.checkContextTargetHasData(req, in, rsp)
+	}
+
+	return false
+}
+
+// shouldSkipQueryDueToInterval checks if the query should be skipped due to interval limits.
+func (f *Function) shouldSkipQueryDueToInterval(req *fnv1.RunFunctionRequest, in *v1beta1.Input, rsp *fnv1.RunFunctionResponse) bool {
+	if in.QueryIntervalMinutes == nil || *in.QueryIntervalMinutes <= 0 {
+		return false
+	}
+
+	intervalMinutes := *in.QueryIntervalMinutes
+
+	// Only check intervals for status targets
+	if !strings.HasPrefix(in.Target, "status.") {
+		return false
+	}
+
+	xrStatus, _, err := f.getXRAndStatus(req)
+	if err != nil {
+		f.log.Debug("Cannot get XR status for interval check", "error", err)
+		return false
+	}
+
+	statusField := strings.TrimPrefix(in.Target, "status.")
+
+	// Get the current target data
+	currentValue := interface{}(xrStatus)
+	parts, err := ParseNestedKey(statusField)
+	if err != nil {
+		return false
+	}
+
+	for _, k := range parts {
+		if nestedMap, ok := currentValue.(map[string]interface{}); ok {
+			if nextValue, exists := nestedMap[k]; exists {
+				currentValue = nextValue
+			} else {
+				return false // No existing data, don't skip
+			}
+		} else {
+			return false
+		}
+	}
+
+	// Check if we have a lastQueryTime
+	if dataMap, ok := currentValue.(map[string]interface{}); ok {
+		if lastQueryTimeStr, exists := dataMap["lastQueryTime"]; exists {
+			if lastQueryTimeString, ok := lastQueryTimeStr.(string); ok {
+				lastQueryTime, err := time.Parse(time.RFC3339, lastQueryTimeString)
+				if err != nil {
+					f.log.Debug("Cannot parse lastQueryTime", "error", err)
+					return false
+				}
+
+				now := time.Now()
+				elapsed := now.Sub(lastQueryTime)
+				intervalDuration := time.Duration(intervalMinutes) * time.Minute
+
+				if elapsed < intervalDuration {
+					f.log.Info("Skipping query due to interval limit",
+						"target", in.Target,
+						"intervalMinutes", intervalMinutes,
+						"elapsedMinutes", elapsed.Minutes())
+
+					response.ConditionTrue(rsp, "FunctionSkip", "IntervalLimit").
+						WithMessage(fmt.Sprintf("Query skipped due to interval limit (%d minutes)", intervalMinutes)).
+						TargetCompositeAndClaim()
+					return true
+				}
+			}
+		}
 	}
 
 	return false

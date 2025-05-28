@@ -1,0 +1,53 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: function-azresourcegraph-throttling-prevention
+spec:
+  compositeTypeRef:
+    apiVersion: example.crossplane.io/v1
+    kind: XR
+  mode: Pipeline
+  pipeline:
+  - step: query-large-dataset
+    functionRef:
+      name: function-azresourcegraph
+    input:
+      apiVersion: azresourcegraph.fn.crossplane.io/v1beta1
+      kind: Input
+      # Large query that might return partial results due to API limits
+      query: |
+        Resources 
+        | project name, location, type, id, resourceGroup, subscriptionId, tags
+        | where type in ('Microsoft.Compute/virtualMachines', 'Microsoft.Storage/storageAccounts', 'Microsoft.Network/virtualNetworks')
+        | order by name desc
+      target: "status.allResources"
+      # Query every 10 minutes to handle partial results and avoid throttling
+      queryIntervalMinutes: 10
+      # Don't skip when target has data since we want to get complete results
+      skipQueryWhenTargetHasData: false
+    credentials:
+      - name: azure-creds
+        source: Secret
+        secretRef:
+          namespace: upbound-system
+          name: azure-account-creds
+  - step: query-vm-details
+    functionRef:
+      name: function-azresourcegraph
+    input:
+      apiVersion: azresourcegraph.fn.crossplane.io/v1beta1
+      kind: Input
+      query: |
+        Resources 
+        | where type =~ 'Microsoft.Compute/virtualMachines'
+        | project name, location, properties.hardwareProfile.vmSize, properties.storageProfile.osDisk.osType
+        | order by name desc
+      target: "status.vmDetails"
+      # Different interval for different query complexity
+      queryIntervalMinutes: 5
+    credentials:
+      - name: azure-creds
+        source: Secret
+        secretRef:
+          namespace: upbound-system
+          name: azure-account-creds
