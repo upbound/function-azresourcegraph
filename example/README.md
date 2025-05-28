@@ -18,8 +18,8 @@ your valid Azure credentials.
 
 The function now supports periodic queries to handle Azure Resource Graph API throttling and partial data scenarios. Use the `queryIntervalMinutes` parameter to limit query frequency:
 
-- **periodic-query-example/**: Basic periodic query setup with 15-minute intervals
-- **throttling-prevention-example/**: Advanced example showing multiple queries with different intervals to prevent throttling
+- **[periodic-query-example/](./periodic-query-example/)**: Basic periodic query setup with 15-minute intervals
+- **[throttling-prevention-example/](./throttling-prevention-example/)**: Advanced example showing multiple queries with different intervals to prevent throttling
 
 ### Key Features
 
