@@ -5,31 +5,39 @@ metadata:
 spec:
   group: example.crossplane.io
   names:
+    categories:
+    - crossplane
     kind: XR
     plural: xrs
-  claimNames:
-    kind: XRClaim
-    plural: xrclaims
   versions:
   - name: v1
-    served: true
     referenceable: true
     schema:
       openAPIV3Schema:
-        type: object
+        description: XR is the Schema for the XR API.
         properties:
           spec:
+            description: XRSpec defines the desired state of XR.
             type: object
-            properties:
-              count:
-                type: integer
-                default: 1
           status:
+            description: XRStatus defines the observed state of XR.
             type: object
             properties:
-              allResources:
-                type: object
+              azResourceGraphQueryResult:
+                description: Freeform field containing query results from function-azresourcegraph
+                type: array
+                items:
+                  type: object
                 x-kubernetes-preserve-unknown-fields: true
-              vmDetails:
-                type: object
-                x-kubernetes-preserve-unknown-fields: true
+        required:
+        - spec
+        type: object
+    served: true
+status:
+  controllers:
+    compositeResourceClaimType:
+      apiVersion: ""
+      kind: ""
+    compositeResourceType:
+      apiVersion: ""
+      kind: ""

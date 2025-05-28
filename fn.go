@@ -483,13 +483,20 @@ func (f *Function) putQueryResultToStatus(req *fnv1.RunFunctionRequest, rsp *fnv
 	// Prepare the result data with timestamp if interval is configured
 	resultData := results.Data
 	if in.QueryIntervalMinutes != nil && *in.QueryIntervalMinutes > 0 {
-		// Only add lastQueryTime if the result is already a map (preserves backwards compatibility)
-		if dataMap, ok := resultData.(map[string]interface{}); ok {
+		if dataArray, ok := resultData.([]interface{}); ok {
+			// For array results (the intended structure), add lastQueryTime as special element
+			timestampElement := map[string]interface{}{
+				"lastQueryTime": time.Now().Format(time.RFC3339),
+			}
+			dataArray = append(dataArray, timestampElement)
+			resultData = dataArray
+			f.log.Debug("Added lastQueryTime element to array result", "target", in.Target, "queryIntervalMinutes", *in.QueryIntervalMinutes)
+		} else if dataMap, ok := resultData.(map[string]interface{}); ok {
+			// For map results (backwards compatibility), add lastQueryTime as field
 			dataMap["lastQueryTime"] = time.Now().Format(time.RFC3339)
-			f.log.Debug("Added lastQueryTime to query result", "target", in.Target, "queryIntervalMinutes", *in.QueryIntervalMinutes)
+			f.log.Debug("Added lastQueryTime to map result", "target", in.Target, "queryIntervalMinutes", *in.QueryIntervalMinutes)
 		} else {
-			// If results.Data is not a map (primitive/array), we cannot add timestamp without breaking compatibility
-			f.log.Debug("Cannot add lastQueryTime to non-map result data, skipping timestamp",
+			f.log.Debug("Result data is neither array nor map, cannot add lastQueryTime",
 				"target", in.Target,
 				"resultType", fmt.Sprintf("%T", resultData),
 				"queryIntervalMinutes", *in.QueryIntervalMinutes)
@@ -718,11 +725,41 @@ func (f *Function) getTargetData(req *fnv1.RunFunctionRequest, in *v1beta1.Input
 
 // extractLastQueryTime extracts and parses the lastQueryTime from target data
 func (f *Function) extractLastQueryTime(targetData interface{}) (time.Time, error) {
-	dataMap, ok := targetData.(map[string]interface{})
-	if !ok {
-		return time.Time{}, errors.New("target data is not a map")
+	// Handle array results (the intended structure) - look for special timestamp element
+	if dataArray, ok := targetData.([]interface{}); ok {
+		return f.extractLastQueryTimeFromArray(dataArray)
 	}
 
+	// Handle map results (backwards compatibility)
+	if dataMap, ok := targetData.(map[string]interface{}); ok {
+		return f.extractLastQueryTimeFromMap(dataMap)
+	}
+
+	return time.Time{}, errors.New("target data is neither array nor map")
+}
+
+// extractLastQueryTimeFromArray extracts lastQueryTime from array results
+func (f *Function) extractLastQueryTimeFromArray(dataArray []interface{}) (time.Time, error) {
+	// Look for the last element with lastQueryTime
+	for i := len(dataArray) - 1; i >= 0; i-- {
+		if element, ok := dataArray[i].(map[string]interface{}); ok {
+			if lastQueryTimeStr, exists := element["lastQueryTime"]; exists {
+				if lastQueryTimeString, ok := lastQueryTimeStr.(string); ok {
+					lastQueryTime, err := time.Parse(time.RFC3339, lastQueryTimeString)
+					if err != nil {
+						f.log.Debug("Cannot parse lastQueryTime from array element", "error", err)
+						return time.Time{}, err
+					}
+					return lastQueryTime, nil
+				}
+			}
+		}
+	}
+	return time.Time{}, errors.New("no lastQueryTime element found in array")
+}
+
+// extractLastQueryTimeFromMap extracts lastQueryTime from map results
+func (f *Function) extractLastQueryTimeFromMap(dataMap map[string]interface{}) (time.Time, error) {
 	lastQueryTimeStr, exists := dataMap["lastQueryTime"]
 	if !exists {
 		return time.Time{}, errors.New("no lastQueryTime field")
