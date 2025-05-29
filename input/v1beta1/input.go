@@ -51,4 +51,10 @@ type Input struct {
 	// Default is false to ensure continuous reconciliation
 	// +optional
 	SkipQueryWhenTargetHasData *bool `json:"skipQueryWhenTargetHasData,omitempty"`
+
+	// QueryIntervalMinutes specifies the minimum interval between queries in minutes
+	// Used to prevent throttling and handle partial data scenarios
+	// Default is 0 (no interval limiting)
+	// +optional
+	QueryIntervalMinutes *int `json:"queryIntervalMinutes,omitempty"`
 }

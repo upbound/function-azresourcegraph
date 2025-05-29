@@ -1,23 +1,25 @@
 apiVersion: apiextensions.crossplane.io/v1
 kind: Composition
 metadata:
-  name: function-azresourcegraph
+  name: function-azresourcegraph-periodic
 spec:
   compositeTypeRef:
     apiVersion: example.crossplane.io/v1
     kind: XR
   mode: Pipeline
   pipeline:
-  - step: query-azresourcegraph
+  - step: query-azresourcegraph-periodic
     functionRef:
       name: function-azresourcegraph
     input:
       apiVersion: azresourcegraph.fn.crossplane.io/v1beta1
       kind: Input
-      query: "Resources | project name, location, type, id| where type =~ 'Microsoft.Compute/virtualMachines' | order by name desc"
+      query: "Resources | project name, location, type, id | where type =~ 'Microsoft.Compute/virtualMachines' | order by name desc"
       target: "status.azResourceGraphQueryResult"
-      # skipQueryWhenTargetHasData: false # Optional: Set to true to skip query if target already has data
-      # queryIntervalMinutes: 10 # Optional: Limit query frequency to every 10 minutes to prevent throttling
+      # Periodic query configuration - query will only run every 15 minutes
+      queryIntervalMinutes: 15
+      # Skip query if target already has data (optional, works with intervals)
+      skipQueryWhenTargetHasData: false
     credentials:
       - name: azure-creds
         source: Secret

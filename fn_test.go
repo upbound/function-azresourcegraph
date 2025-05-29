@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"testing"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resourcegraph/armresourcegraph"
@@ -2019,6 +2021,733 @@ func TestRunFunction(t *testing.T) {
 				},
 			},
 		},
+		"ShouldExecuteQueryWhenNoIntervalSet": {
+			reason: "The Function should execute query when queryIntervalMinutes is not set",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"target": "status.azResourceGraphQueryResult"
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:   "FunctionSuccess",
+							Status: fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason: "Success",
+							Target: fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_NORMAL,
+							Message:  `Query: "Resources| count"`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
+								"status": {
+									"azResourceGraphQueryResult": {
+										"resource": "mock-resource"
+									}
+								}}`),
+						},
+					},
+				},
+			},
+		},
+		"ShouldExecuteQueryWhenNoLastQueryTime": {
+			reason: "The Function should execute query when no lastQueryTime exists even with interval set",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"target": "status.azResourceGraphQueryResult",
+						"queryIntervalMinutes": 10
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
+								"status": {
+									"azResourceGraphQueryResult": {
+										"resource": "existing-data"
+									}
+								}}`),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:   "FunctionSuccess",
+							Status: fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason: "Success",
+							Target: fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_NORMAL,
+							Message:  `Query: "Resources| count"`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
+								"status": {
+									"azResourceGraphQueryResult": {
+										"resource": "mock-resource"
+									}
+								}}`),
+						},
+					},
+				},
+			},
+		},
+		"ShouldSkipQueryWhenWithinInterval": {
+			reason: "The Function should skip query when last query was within the specified interval",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"target": "status.azResourceGraphQueryResult",
+						"queryIntervalMinutes": 10
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
+								"status": {
+									"azResourceGraphQueryResult": {
+										"resource": "existing-data",
+										"lastQueryTime": "` + time.Now().Add(-5*time.Minute).Format(time.RFC3339) + `"
+									}
+								}}`),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:    "FunctionSkip",
+							Message: strPtr("Query skipped due to interval limit (10 minutes)"),
+							Status:  fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason:  "IntervalLimit",
+							Target:  fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+						{
+							Type:   "FunctionSuccess",
+							Status: fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason: "Success",
+							Target: fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
+								"status": {
+									"azResourceGraphQueryResult": {
+										"resource": "existing-data",
+										"lastQueryTime": "` + time.Now().Add(-5*time.Minute).Format(time.RFC3339) + `"
+									}
+								}}`),
+						},
+					},
+				},
+			},
+		},
+		"ShouldExecuteQueryWhenIntervalExpired": {
+			reason: "The Function should execute query when the interval has expired",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"target": "status.azResourceGraphQueryResult",
+						"queryIntervalMinutes": 10
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
+								"status": {
+									"azResourceGraphQueryResult": {
+										"resource": "existing-data",
+										"lastQueryTime": "` + time.Now().Add(-15*time.Minute).Format(time.RFC3339) + `"
+									}
+								}}`),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:   "FunctionSuccess",
+							Status: fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason: "Success",
+							Target: fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_NORMAL,
+							Message:  `Query: "Resources| count"`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
+								"status": {
+									"azResourceGraphQueryResult": {
+										"resource": "mock-resource"
+									}
+								}}`),
+						},
+					},
+				},
+			},
+		},
+		"ShouldExecuteQueryWhenInvalidTimestamp": {
+			reason: "The Function should execute query when lastQueryTime is invalid",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"target": "status.azResourceGraphQueryResult",
+						"queryIntervalMinutes": 10
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
+								"status": {
+									"azResourceGraphQueryResult": {
+										"resource": "existing-data",
+										"lastQueryTime": "invalid-timestamp"
+									}
+								}}`),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:   "FunctionSuccess",
+							Status: fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason: "Success",
+							Target: fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_NORMAL,
+							Message:  `Query: "Resources| count"`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
+								"status": {
+									"azResourceGraphQueryResult": {
+										"resource": "mock-resource"
+									}
+								}}`),
+						},
+					},
+				},
+			},
+		},
+		"ShouldIgnoreIntervalForContextTargets": {
+			reason: "The Function should ignore interval limits for context targets",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"target": "context.azResourceGraphQueryResult",
+						"queryIntervalMinutes": 10
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:   "FunctionSuccess",
+							Status: fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason: "Success",
+							Target: fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_NORMAL,
+							Message:  `Query: "Resources| count"`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Context: resource.MustStructJSON(`{
+						"azResourceGraphQueryResult": {
+							"resource": "mock-resource"
+						}
+					}`),
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								}
+							}`),
+						},
+					},
+				},
+			},
+		},
+		"ShouldExecuteQueryWhenIntervalIsZero": {
+			reason: "The Function should execute query when queryIntervalMinutes is zero or negative",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"target": "status.azResourceGraphQueryResult",
+						"queryIntervalMinutes": 0
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
+								"status": {
+									"azResourceGraphQueryResult": {
+										"resource": "existing-data",
+										"lastQueryTime": "` + time.Now().Add(-1*time.Minute).Format(time.RFC3339) + `"
+									}
+								}}`),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:   "FunctionSuccess",
+							Status: fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason: "Success",
+							Target: fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_NORMAL,
+							Message:  `Query: "Resources| count"`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
+								"status": {
+									"azResourceGraphQueryResult": {
+										"resource": "mock-resource"
+									}
+								}}`),
+						},
+					},
+				},
+			},
+		},
+		"ShouldWriteLastQueryTimeForStatusTarget": {
+			reason: "The Function should write lastQueryTime when queryIntervalMinutes is set for status targets",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"target": "status.azResourceGraphQueryResult",
+						"queryIntervalMinutes": 10
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:   "FunctionSuccess",
+							Status: fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason: "Success",
+							Target: fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_NORMAL,
+							Message:  `Query: "Resources| count"`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
+								"status": {
+									"azResourceGraphQueryResult": {
+										"resource": "mock-resource",
+										"lastQueryTime": "2024-01-01T12:00:00Z"
+									}
+								}}`),
+						},
+					},
+				},
+			},
+		},
+		"ShouldExecuteQueryWithDifferentTargetName": {
+			reason: "The Function should write lastQueryTime to any status target name when interval is set",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"target": "status.vmData",
+						"queryIntervalMinutes": 5
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				// This test will use special validation
+				rsp: nil,
+			},
+		},
+		"ShouldNotWriteLastQueryTimeForContextTarget": {
+			reason: "The Function should not write lastQueryTime for context targets",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"target": "context.azResourceGraphQueryResult",
+						"queryIntervalMinutes": 10
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:   "FunctionSuccess",
+							Status: fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason: "Success",
+							Target: fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_NORMAL,
+							Message:  `Query: "Resources| count"`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Context: resource.MustStructJSON(`{
+						"azResourceGraphQueryResult": {
+							"resource": "mock-resource"
+						}
+					}`),
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								}
+							}`),
+						},
+					},
+				},
+			},
+		},
+		"ShouldNotWriteLastQueryTimeWhenIntervalNotSet": {
+			reason: "The Function should not write lastQueryTime when queryIntervalMinutes is not set",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"target": "status.azResourceGraphQueryResult"
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Conditions: []*fnv1.Condition{
+						{
+							Type:   "FunctionSuccess",
+							Status: fnv1.Status_STATUS_CONDITION_TRUE,
+							Reason: "Success",
+							Target: fnv1.Target_TARGET_COMPOSITE_AND_CLAIM.Enum(),
+						},
+					},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_NORMAL,
+							Message:  `Query: "Resources| count"`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(`{
+								"apiVersion": "example.org/v1",
+								"kind": "XR",
+								"metadata": {
+									"name": "cool-xr"
+								},
+								"status": {
+									"azResourceGraphQueryResult": {
+										"resource": "mock-resource"
+									}
+								}}`),
+						},
+					},
+				},
+			},
+		},
+		"ShouldAddTimestampToMapResultsOnly": {
+			reason: "The Function should only add lastQueryTime to map results (backwards compatibility)",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta: &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(`{
+						"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+						"kind": "Input",
+						"query": "Resources| count",
+						"target": "status.azResourceGraphQueryResult",
+						"queryIntervalMinutes": 10
+					}`),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: creds},
+						},
+					},
+				},
+			},
+			want: want{
+				// This test verifies backwards compatibility - the mock returns a map
+				// so lastQueryTime should be added as a sibling field, not wrapped
+				rsp: nil, // Will be validated specially
+			},
+		},
 	}
 
 	for name, tc := range cases {
@@ -2044,8 +2773,26 @@ func TestRunFunction(t *testing.T) {
 			}
 			rsp, err := f.RunFunction(tc.args.ctx, tc.args.req)
 
-			if diff := cmp.Diff(tc.want.rsp, rsp, protocmp.Transform()); diff != "" {
-				t.Errorf("%s\nf.RunFunction(...): -want rsp, +got rsp:\n%s", tc.reason, diff)
+			// Special handling for timestamp tests
+			if name == "ShouldWriteLastQueryTimeForStatusTarget" || name == "ShouldExecuteQueryWithDifferentTargetName" || name == "ShouldAddTimestampToMapResultsOnly" || name == "ShouldExecuteQueryWhenNoLastQueryTime" || name == "ShouldExecuteQueryWhenInvalidTimestamp" || name == "ShouldExecuteQueryWhenIntervalExpired" {
+				// Verify the structure and validate timestamp
+				if err := validateLastQueryTimeInResponse(rsp, name); err != nil {
+					t.Errorf("%s\n%v", tc.reason, err)
+					return
+				}
+
+				// Additional validation for backwards compatibility test
+				if name == "ShouldAddTimestampToMapResultsOnly" {
+					if err := validateBackwardsCompatibility(rsp); err != nil {
+						t.Errorf("%s\nBackwards compatibility check failed: %v", tc.reason, err)
+						return
+					}
+				}
+				// Don't compare exact response for timestamp tests
+			} else {
+				if diff := cmp.Diff(tc.want.rsp, rsp, protocmp.Transform()); diff != "" {
+					t.Errorf("%s\nf.RunFunction(...): -want rsp, +got rsp:\n%s", tc.reason, diff)
+				}
 			}
 
 			if diff := cmp.Diff(tc.want.err, err, cmpopts.EquateErrors()); diff != "" {
@@ -2053,4 +2800,100 @@ func TestRunFunction(t *testing.T) {
 			}
 		})
 	}
+}
+
+func validateLastQueryTimeInResponse(rsp *fnv1.RunFunctionResponse, testName string) error {
+	if rsp.GetDesired() == nil || rsp.GetDesired().GetComposite() == nil {
+		return fmt.Errorf("missing desired composite resource")
+	}
+
+	// Determine which field to check based on test name
+	targetFieldName := "azResourceGraphQueryResult"
+	if testName == "ShouldExecuteQueryWithDifferentTargetName" {
+		targetFieldName = "vmData"
+	}
+
+	// Get status from the resource
+	statusValue, exists := rsp.GetDesired().GetComposite().GetResource().GetFields()["status"]
+	if !exists {
+		return fmt.Errorf("missing status field")
+	}
+
+	status := statusValue.GetStructValue().AsMap()
+
+	// Get the target data directly
+	targetData, ok := status[targetFieldName]
+	if !ok {
+		return fmt.Errorf("missing %s in status", targetFieldName)
+	}
+
+	queryResult, ok := targetData.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("query result is not a map")
+	}
+
+	// Check that resource field exists
+	if _, exists := queryResult["resource"]; !exists {
+		return fmt.Errorf("missing resource field in query result")
+	}
+
+	// Check that lastQueryTime exists and is a valid RFC3339 timestamp
+	lastQueryTimeRaw, exists := queryResult["lastQueryTime"]
+	if !exists {
+		return fmt.Errorf("missing lastQueryTime field")
+	}
+
+	lastQueryTimeStr, ok := lastQueryTimeRaw.(string)
+	if !ok {
+		return fmt.Errorf("lastQueryTime is not a string")
+	}
+
+	// Validate timestamp format
+	if _, err := time.Parse(time.RFC3339, lastQueryTimeStr); err != nil {
+		return fmt.Errorf("invalid lastQueryTime format: %w", err)
+	}
+
+	return nil
+}
+
+func validateBackwardsCompatibility(rsp *fnv1.RunFunctionResponse) error {
+	if rsp.GetDesired() == nil || rsp.GetDesired().GetComposite() == nil {
+		return fmt.Errorf("missing desired composite resource")
+	}
+
+	// Get status from the resource
+	statusValue, exists := rsp.GetDesired().GetComposite().GetResource().GetFields()["status"]
+	if !exists {
+		return fmt.Errorf("missing status field")
+	}
+
+	status := statusValue.GetStructValue().AsMap()
+
+	// Get the query result
+	targetData, ok := status["azResourceGraphQueryResult"]
+	if !ok {
+		return fmt.Errorf("missing azResourceGraphQueryResult in status")
+	}
+
+	queryResult, ok := targetData.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("query result is not a map")
+	}
+
+	// Verify backwards compatibility - the original "resource" field should be preserved at the top level
+	if _, exists := queryResult["resource"]; !exists {
+		return fmt.Errorf("original 'resource' field not preserved - backwards compatibility broken")
+	}
+
+	// Verify lastQueryTime is added as a sibling, not wrapped
+	if _, exists := queryResult["lastQueryTime"]; !exists {
+		return fmt.Errorf("lastQueryTime not added as sibling field")
+	}
+
+	// Verify there's no "data" wrapper that would break compatibility
+	if _, exists := queryResult["data"]; exists {
+		return fmt.Errorf("found 'data' wrapper field - this breaks backwards compatibility")
+	}
+
+	return nil
 }

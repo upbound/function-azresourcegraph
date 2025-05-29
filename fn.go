@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -479,11 +480,34 @@ func (f *Function) putQueryResultToStatus(req *fnv1.RunFunctionRequest, rsp *fnv
 		return err
 	}
 
+	// Prepare the result data with timestamp if interval is configured
+	resultData := results.Data
+	if in.QueryIntervalMinutes != nil && *in.QueryIntervalMinutes > 0 {
+		if dataArray, ok := resultData.([]interface{}); ok {
+			// For array results (the intended structure), add lastQueryTime as special element
+			timestampElement := map[string]interface{}{
+				"lastQueryTime": time.Now().Format(time.RFC3339),
+			}
+			dataArray = append(dataArray, timestampElement)
+			resultData = dataArray
+			f.log.Debug("Added lastQueryTime element to array result", "target", in.Target, "queryIntervalMinutes", *in.QueryIntervalMinutes)
+		} else if dataMap, ok := resultData.(map[string]interface{}); ok {
+			// For map results (backwards compatibility), add lastQueryTime as field
+			dataMap["lastQueryTime"] = time.Now().Format(time.RFC3339)
+			f.log.Debug("Added lastQueryTime to map result", "target", in.Target, "queryIntervalMinutes", *in.QueryIntervalMinutes)
+		} else {
+			f.log.Debug("Result data is neither array nor map, cannot add lastQueryTime",
+				"target", in.Target,
+				"resultType", fmt.Sprintf("%T", resultData),
+				"queryIntervalMinutes", *in.QueryIntervalMinutes)
+		}
+	}
+
 	// Update the specific status field
 	statusField := strings.TrimPrefix(in.Target, "status.")
-	err = SetNestedKey(xrStatus, statusField, results.Data)
+	err = SetNestedKey(xrStatus, statusField, resultData)
 	if err != nil {
-		return errors.Wrapf(err, "cannot set status field %s to %v", statusField, results.Data)
+		return errors.Wrapf(err, "cannot set status field %s to %v", statusField, resultData)
 	}
 
 	// Write the updated status field back into the composite resource
@@ -620,6 +644,11 @@ func (f *Function) isValidTarget(target string) bool {
 
 // shouldSkipQuery checks if the query should be skipped.
 func (f *Function) shouldSkipQuery(req *fnv1.RunFunctionRequest, in *v1beta1.Input, rsp *fnv1.RunFunctionResponse) bool {
+	// Check interval-based skipping first
+	if f.shouldSkipQueryDueToInterval(req, in, rsp) {
+		return true
+	}
+
 	// Determine if we should skip the query when target has data
 	var shouldSkipQueryWhenTargetHasData = false // Default to false to ensure continuous reconciliation
 	if in.SkipQueryWhenTargetHasData != nil {
@@ -635,6 +664,137 @@ func (f *Function) shouldSkipQuery(req *fnv1.RunFunctionRequest, in *v1beta1.Inp
 		return f.checkStatusTargetHasData(req, in, rsp)
 	case strings.HasPrefix(in.Target, "context."):
 		return f.checkContextTargetHasData(req, in, rsp)
+	}
+
+	return false
+}
+
+// shouldSkipQueryDueToInterval checks if the query should be skipped due to interval limits.
+func (f *Function) shouldSkipQueryDueToInterval(req *fnv1.RunFunctionRequest, in *v1beta1.Input, rsp *fnv1.RunFunctionResponse) bool {
+	if in.QueryIntervalMinutes == nil || *in.QueryIntervalMinutes <= 0 {
+		return false
+	}
+
+	// Only check intervals for status targets
+	if !strings.HasPrefix(in.Target, "status.") {
+		return false
+	}
+
+	targetData, err := f.getTargetData(req, in)
+	if err != nil {
+		return false
+	}
+
+	lastQueryTime, err := f.extractLastQueryTime(targetData)
+	if err != nil {
+		return false
+	}
+
+	return f.checkIntervalLimit(lastQueryTime, *in.QueryIntervalMinutes, in.Target, rsp)
+}
+
+// getTargetData retrieves the current target data from XR status
+func (f *Function) getTargetData(req *fnv1.RunFunctionRequest, in *v1beta1.Input) (interface{}, error) {
+	xrStatus, _, err := f.getXRAndStatus(req)
+	if err != nil {
+		f.log.Debug("Cannot get XR status for interval check", "error", err)
+		return nil, err
+	}
+
+	statusField := strings.TrimPrefix(in.Target, "status.")
+	parts, err := ParseNestedKey(statusField)
+	if err != nil {
+		return nil, err
+	}
+
+	currentValue := interface{}(xrStatus)
+	for _, k := range parts {
+		if nestedMap, ok := currentValue.(map[string]interface{}); ok {
+			if nextValue, exists := nestedMap[k]; exists {
+				currentValue = nextValue
+			} else {
+				return nil, errors.New("no existing data")
+			}
+		} else {
+			return nil, errors.New("invalid nested structure")
+		}
+	}
+
+	return currentValue, nil
+}
+
+// extractLastQueryTime extracts and parses the lastQueryTime from target data
+func (f *Function) extractLastQueryTime(targetData interface{}) (time.Time, error) {
+	// Handle array results (the intended structure) - look for special timestamp element
+	if dataArray, ok := targetData.([]interface{}); ok {
+		return f.extractLastQueryTimeFromArray(dataArray)
+	}
+
+	// Handle map results (backwards compatibility)
+	if dataMap, ok := targetData.(map[string]interface{}); ok {
+		return f.extractLastQueryTimeFromMap(dataMap)
+	}
+
+	return time.Time{}, errors.New("target data is neither array nor map")
+}
+
+// extractLastQueryTimeFromArray extracts lastQueryTime from array results
+func (f *Function) extractLastQueryTimeFromArray(dataArray []interface{}) (time.Time, error) {
+	// Look for the last element with lastQueryTime
+	for i := len(dataArray) - 1; i >= 0; i-- {
+		if element, ok := dataArray[i].(map[string]interface{}); ok {
+			if lastQueryTimeStr, exists := element["lastQueryTime"]; exists {
+				if lastQueryTimeString, ok := lastQueryTimeStr.(string); ok {
+					lastQueryTime, err := time.Parse(time.RFC3339, lastQueryTimeString)
+					if err != nil {
+						f.log.Debug("Cannot parse lastQueryTime from array element", "error", err)
+						return time.Time{}, err
+					}
+					return lastQueryTime, nil
+				}
+			}
+		}
+	}
+	return time.Time{}, errors.New("no lastQueryTime element found in array")
+}
+
+// extractLastQueryTimeFromMap extracts lastQueryTime from map results
+func (f *Function) extractLastQueryTimeFromMap(dataMap map[string]interface{}) (time.Time, error) {
+	lastQueryTimeStr, exists := dataMap["lastQueryTime"]
+	if !exists {
+		return time.Time{}, errors.New("no lastQueryTime field")
+	}
+
+	lastQueryTimeString, ok := lastQueryTimeStr.(string)
+	if !ok {
+		return time.Time{}, errors.New("lastQueryTime is not a string")
+	}
+
+	lastQueryTime, err := time.Parse(time.RFC3339, lastQueryTimeString)
+	if err != nil {
+		f.log.Debug("Cannot parse lastQueryTime", "error", err)
+		return time.Time{}, err
+	}
+
+	return lastQueryTime, nil
+}
+
+// checkIntervalLimit checks if the interval has elapsed and skips if needed
+func (f *Function) checkIntervalLimit(lastQueryTime time.Time, intervalMinutes int, target string, rsp *fnv1.RunFunctionResponse) bool {
+	now := time.Now()
+	elapsed := now.Sub(lastQueryTime)
+	intervalDuration := time.Duration(intervalMinutes) * time.Minute
+
+	if elapsed < intervalDuration {
+		f.log.Info("Skipping query due to interval limit",
+			"target", target,
+			"intervalMinutes", intervalMinutes,
+			"elapsedMinutes", elapsed.Minutes())
+
+		response.ConditionTrue(rsp, "FunctionSkip", "IntervalLimit").
+			WithMessage(fmt.Sprintf("Query skipped due to interval limit (%d minutes)", intervalMinutes)).
+			TargetCompositeAndClaim()
+		return true
 	}
 
 	return false
