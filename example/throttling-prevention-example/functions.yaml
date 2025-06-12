@@ -4,4 +4,4 @@ kind: Function
 metadata:
   name: function-azresourcegraph
 spec:
-  package: xpkg.upbound.io/upbound/function-azresourcegraph:v0.8.0
+  package: xpkg.upbound.io/upbound/function-azresourcegraph:v0.9.0
