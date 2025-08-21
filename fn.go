@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
@@ -23,9 +24,12 @@ import (
 	"github.com/crossplane/function-sdk-go/response"
 )
 
+// Round-robin counter for service principal selection
+var servicePrincipalCounter uint64
+
 // AzureQueryInterface defines the methods required for querying Azure resources.
 type AzureQueryInterface interface {
-	azQuery(ctx context.Context, azureCreds map[string]string, in *v1beta1.Input) (armresourcegraph.ClientResourcesResponse, error)
+	azQuery(ctx context.Context, azureCreds []map[string]string, in *v1beta1.Input, log logging.Logger) (armresourcegraph.ClientResourcesResponse, error)
 }
 
 // Function returns whatever response you ask it to.
@@ -106,7 +110,7 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 }
 
 // parseInputAndCredentials parses the input and gets the credentials.
-func (f *Function) parseInputAndCredentials(req *fnv1.RunFunctionRequest, rsp *fnv1.RunFunctionResponse) (*v1beta1.Input, map[string]string, error) {
+func (f *Function) parseInputAndCredentials(req *fnv1.RunFunctionRequest, rsp *fnv1.RunFunctionResponse) (*v1beta1.Input, []map[string]string, error) {
 	in := &v1beta1.Input{}
 	if err := request.GetInput(req, in); err != nil {
 		response.ConditionFalse(rsp, "FunctionSuccess", "InternalError").
@@ -124,6 +128,23 @@ func (f *Function) parseInputAndCredentials(req *fnv1.RunFunctionRequest, rsp *f
 	if err != nil {
 		response.Fatal(rsp, err)
 		return nil, nil, err
+	}
+
+	// Log credential format detection
+	if len(azureCreds) == 1 {
+		f.log.Info("Backward compatibility mode: Single service principal detected and converted to array format")
+	} else {
+		f.log.Info("Multiple service principals mode detected", "servicePrincipalCount", len(azureCreds))
+	}
+
+	// Log subscriptionId availability for each service principal (without sensitive data)
+	// Note: subscriptionId in credentials is optional - users can also specify subscriptions in YAML composition files
+	for i, cred := range azureCreds {
+		if _, exists := cred["subscriptionId"]; exists {
+			f.log.Info("Service principal has subscriptionId", "servicePrincipalIndex", i)
+		} else {
+			f.log.Info("Service principal has no subscriptionId - will query all accessible subscriptions", "servicePrincipalIndex", i)
+		}
 	}
 
 	if f.azureQuery == nil {
@@ -283,8 +304,8 @@ func (f *Function) checkStatusTargetHasData(req *fnv1.RunFunctionRequest, in *v1
 }
 
 // executeQuery executes the query.
-func (f *Function) executeQuery(ctx context.Context, azureCreds map[string]string, in *v1beta1.Input, rsp *fnv1.RunFunctionResponse) (armresourcegraph.ClientResourcesResponse, error) {
-	results, err := f.azureQuery.azQuery(ctx, azureCreds, in)
+func (f *Function) executeQuery(ctx context.Context, azureCreds []map[string]string, in *v1beta1.Input, rsp *fnv1.RunFunctionResponse) (armresourcegraph.ClientResourcesResponse, error) {
+	results, err := f.azureQuery.azQuery(ctx, azureCreds, in, f.log)
 	if err != nil {
 		response.Fatal(rsp, err)
 		f.log.Info("FAILURE: ", "failure", fmt.Sprint(err))
@@ -322,17 +343,27 @@ func (f *Function) processResults(req *fnv1.RunFunctionRequest, in *v1beta1.Inpu
 	return nil
 }
 
-func getCreds(req *fnv1.RunFunctionRequest) (map[string]string, error) {
-	var azureCreds map[string]string
+func getCreds(req *fnv1.RunFunctionRequest) ([]map[string]string, error) {
+	var azureCreds []map[string]string
 	rawCreds := req.GetCredentials()
 
 	if credsData, ok := rawCreds["azure-creds"]; ok {
 		credsData := credsData.GetCredentialData().GetData()
 		if credsJSON, ok := credsData["credentials"]; ok {
-			err := json.Unmarshal(credsJSON, &azureCreds)
-			if err != nil {
+			// Try to unmarshal as array of service principals first
+			if err := json.Unmarshal(credsJSON, &azureCreds); err == nil && len(azureCreds) > 0 {
+				// Note: subscriptionId is optional in credentials
+				// Service principals without subscriptionId will query all accessible subscriptions in the tenant
+				return azureCreds, nil
+			}
+
+			// Fallback to single service principal format for backward compatibility
+			var singleCred map[string]string
+			if err := json.Unmarshal(credsJSON, &singleCred); err != nil {
 				return nil, errors.Wrap(err, "cannot parse json credentials")
 			}
+			// Convert single credential to array format for backward compatibility
+			azureCreds = []map[string]string{singleCred}
 		}
 	} else {
 		return nil, errors.New("failed to get azure-creds credentials")
@@ -346,11 +377,32 @@ func getCreds(req *fnv1.RunFunctionRequest) (map[string]string, error) {
 type AzureQuery struct{}
 
 // azQuery is a concrete implementation that interacts with Azure Resource Graph API.
-func (a *AzureQuery) azQuery(ctx context.Context, azureCreds map[string]string, in *v1beta1.Input) (armresourcegraph.ClientResourcesResponse, error) {
-	tenantID := azureCreds["tenantId"]
-	clientID := azureCreds["clientId"]
-	clientSecret := azureCreds["clientSecret"]
-	subscriptionID := azureCreds["subscriptionId"]
+func (a *AzureQuery) azQuery(ctx context.Context, azureCreds []map[string]string, in *v1beta1.Input, log logging.Logger) (armresourcegraph.ClientResourcesResponse, error) {
+	if len(azureCreds) == 0 {
+		return armresourcegraph.ClientResourcesResponse{}, errors.New("no Azure credentials provided")
+	}
+
+	// Round-robin selection for service principals to avoid throttling
+	index := atomic.AddUint64(&servicePrincipalCounter, 1) % uint64(len(azureCreds))
+	selectedCreds := azureCreds[index]
+
+	tenantID := selectedCreds["tenantId"]
+	clientID := selectedCreds["clientId"]
+	clientSecret := selectedCreds["clientSecret"]
+
+	// Collect all subscription IDs from all credential sets (subscriptionId is optional)
+	var allSubscriptionIDs []string
+	for _, cred := range azureCreds {
+		if subID, exists := cred["subscriptionId"]; exists && subID != "" {
+			allSubscriptionIDs = append(allSubscriptionIDs, subID)
+		}
+	}
+
+	// Log credential information using structured logging (without sensitive data)
+	log.Debug("Selected service principal",
+		"index", index,
+		"clientId", clientID,
+		"totalCredentialSets", len(azureCreds))
 
 	// To configure DefaultAzureCredential to authenticate a user-assigned managed identity,
 	// set the environment variable AZURE_CLIENT_ID to the identity's client ID.
@@ -371,12 +423,23 @@ func (a *AzureQuery) azQuery(ctx context.Context, azureCreds map[string]string, 
 	}
 
 	// Handle subscriptions in the following priority:
-	// 1. Use Subscriptions field from Input if provided
-	// 2. Otherwise use the subscriptionID from creds if available
+	// 1. Use Subscriptions field from Input if provided (from YAML composition)
+	// 2. Otherwise use subscriptionIDs from credentials if available (subscriptionId is optional)
+	// 3. If no subscriptions specified anywhere, the query will run against the tenant (all accessible subscriptions)
 	if len(in.Subscriptions) > 0 {
 		queryRequest.Subscriptions = in.Subscriptions
-	} else if len(subscriptionID) > 0 {
-		queryRequest.Subscriptions = []*string{to.Ptr(subscriptionID)}
+		log.Debug("Using subscriptions from input", "subscriptionCount", len(in.Subscriptions))
+	} else if len(allSubscriptionIDs) > 0 {
+		// Convert string slice to []*string for the API
+		subscriptionPtrs := make([]*string, len(allSubscriptionIDs))
+		for i, subID := range allSubscriptionIDs {
+			subscriptionPtrs[i] = to.Ptr(subID)
+		}
+		queryRequest.Subscriptions = subscriptionPtrs
+		log.Debug("Using subscriptions from credentials", "subscriptionCount", len(allSubscriptionIDs))
+	} else {
+		// No subscriptions specified in YAML or credentials - query will run against all accessible subscriptions in the tenant
+		log.Debug("No subscriptions specified in YAML or credentials - query will run against all accessible subscriptions in the tenant")
 	}
 
 	if len(in.ManagementGroups) > 0 {
