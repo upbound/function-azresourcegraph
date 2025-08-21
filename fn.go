@@ -372,6 +372,7 @@ func (a *AzureQuery) azQuery(ctx context.Context, azureCreds interface{}, in *v1
 	var totalCredentialSets int
 	var index int
 	var allSubscriptionIDs []string
+	var multipleCredentialsMode bool
 
 	// Handle different credential formats and extract subscription IDs in one place
 	switch v := azureCreds.(type) {
@@ -380,6 +381,7 @@ func (a *AzureQuery) azQuery(ctx context.Context, azureCreds interface{}, in *v1
 		selectedCreds = v
 		totalCredentialSets = 1
 		index = 0
+		multipleCredentialsMode = false
 		log.Debug("Single service principal mode")
 
 		// Extract subscription ID if present
@@ -395,6 +397,7 @@ func (a *AzureQuery) azQuery(ctx context.Context, azureCreds interface{}, in *v1
 		index = int(atomic.AddUint64(&servicePrincipalCounter, 1) % uint64(len(v)))
 		selectedCreds = v[index]
 		totalCredentialSets = len(v)
+		multipleCredentialsMode = true
 		log.Debug("Multiple service principals mode")
 
 		// Extract subscription IDs from all service principals
@@ -413,10 +416,15 @@ func (a *AzureQuery) azQuery(ctx context.Context, azureCreds interface{}, in *v1
 	clientSecret := selectedCreds["clientSecret"]
 
 	// Log credential information using structured logging (without sensitive data)
-	log.Debug("Selected service principal",
-		"index", index,
-		"clientId", clientID,
-		"totalCredentialSets", totalCredentialSets)
+	if multipleCredentialsMode {
+		log.Debug("Selected service principal",
+			"index", index,
+			"clientId", clientID,
+			"totalCredentialSets", totalCredentialSets)
+	} else {
+		log.Debug("Selected service principal",
+			"clientId", clientID)
+	}
 
 	// To configure DefaultAzureCredential to authenticate a user-assigned managed identity,
 	// set the environment variable AZURE_CLIENT_ID to the identity's client ID.
