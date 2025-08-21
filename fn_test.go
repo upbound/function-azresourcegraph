@@ -21,10 +21,10 @@ import (
 )
 
 type MockAzureQuery struct {
-	AzQueryFunc func(ctx context.Context, azureCreds []map[string]string, in *v1beta1.Input, log logging.Logger) (armresourcegraph.ClientResourcesResponse, error)
+	AzQueryFunc func(ctx context.Context, azureCreds interface{}, in *v1beta1.Input, log logging.Logger) (armresourcegraph.ClientResourcesResponse, error)
 }
 
-func (m *MockAzureQuery) azQuery(ctx context.Context, azureCreds []map[string]string, in *v1beta1.Input, log logging.Logger) (armresourcegraph.ClientResourcesResponse, error) {
+func (m *MockAzureQuery) azQuery(ctx context.Context, azureCreds interface{}, in *v1beta1.Input, log logging.Logger) (armresourcegraph.ClientResourcesResponse, error) {
 	return m.AzQueryFunc(ctx, azureCreds, in, log)
 }
 
@@ -2754,7 +2754,7 @@ func TestRunFunction(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			// Mocking the azQuery function to return a successful result
 			mockQuery := &MockAzureQuery{
-				AzQueryFunc: func(_ context.Context, _ []map[string]string, _ *v1beta1.Input, _ logging.Logger) (armresourcegraph.ClientResourcesResponse, error) {
+				AzQueryFunc: func(_ context.Context, _ interface{}, _ *v1beta1.Input, _ logging.Logger) (armresourcegraph.ClientResourcesResponse, error) {
 					return armresourcegraph.ClientResourcesResponse{
 						QueryResponse: armresourcegraph.QueryResponse{
 							Count:           to.Ptr(int64(1)),

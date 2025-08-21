@@ -29,7 +29,7 @@ var servicePrincipalCounter uint64
 
 // AzureQueryInterface defines the methods required for querying Azure resources.
 type AzureQueryInterface interface {
-	azQuery(ctx context.Context, azureCreds []map[string]string, in *v1beta1.Input, log logging.Logger) (armresourcegraph.ClientResourcesResponse, error)
+	azQuery(ctx context.Context, azureCreds interface{}, in *v1beta1.Input, log logging.Logger) (armresourcegraph.ClientResourcesResponse, error)
 }
 
 // Function returns whatever response you ask it to.
@@ -110,7 +110,7 @@ func (f *Function) RunFunction(ctx context.Context, req *fnv1.RunFunctionRequest
 }
 
 // parseInputAndCredentials parses the input and gets the credentials.
-func (f *Function) parseInputAndCredentials(req *fnv1.RunFunctionRequest, rsp *fnv1.RunFunctionResponse) (*v1beta1.Input, []map[string]string, error) {
+func (f *Function) parseInputAndCredentials(req *fnv1.RunFunctionRequest, rsp *fnv1.RunFunctionResponse) (*v1beta1.Input, interface{}, error) {
 	in := &v1beta1.Input{}
 	if err := request.GetInput(req, in); err != nil {
 		response.ConditionFalse(rsp, "FunctionSuccess", "InternalError").
@@ -131,20 +131,13 @@ func (f *Function) parseInputAndCredentials(req *fnv1.RunFunctionRequest, rsp *f
 	}
 
 	// Log credential format detection
-	if len(azureCreds) == 1 {
-		f.log.Info("Backward compatibility mode: Single service principal detected and converted to array format")
-	} else {
-		f.log.Info("Multiple service principals mode detected", "servicePrincipalCount", len(azureCreds))
-	}
-
-	// Log subscriptionId availability for each service principal (without sensitive data)
-	// Note: subscriptionId in credentials is optional - users can also specify subscriptions in YAML composition files
-	for i, cred := range azureCreds {
-		if _, exists := cred["subscriptionId"]; exists {
-			f.log.Info("Service principal has subscriptionId", "servicePrincipalIndex", i)
-		} else {
-			f.log.Info("Service principal has no subscriptionId - will query all accessible subscriptions", "servicePrincipalIndex", i)
-		}
+	switch v := azureCreds.(type) {
+	case map[string]string:
+		f.log.Info("Single service principal mode detected")
+	case []map[string]string:
+		f.log.Info("Multiple service principals mode detected", "servicePrincipalCount", len(v))
+	default:
+		return nil, nil, errors.New("invalid credential format")
 	}
 
 	if f.azureQuery == nil {
@@ -304,7 +297,7 @@ func (f *Function) checkStatusTargetHasData(req *fnv1.RunFunctionRequest, in *v1
 }
 
 // executeQuery executes the query.
-func (f *Function) executeQuery(ctx context.Context, azureCreds []map[string]string, in *v1beta1.Input, rsp *fnv1.RunFunctionResponse) (armresourcegraph.ClientResourcesResponse, error) {
+func (f *Function) executeQuery(ctx context.Context, azureCreds interface{}, in *v1beta1.Input, rsp *fnv1.RunFunctionResponse) (armresourcegraph.ClientResourcesResponse, error) {
 	results, err := f.azureQuery.azQuery(ctx, azureCreds, in, f.log)
 	if err != nil {
 		response.Fatal(rsp, err)
@@ -343,18 +336,16 @@ func (f *Function) processResults(req *fnv1.RunFunctionRequest, in *v1beta1.Inpu
 	return nil
 }
 
-func getCreds(req *fnv1.RunFunctionRequest) ([]map[string]string, error) {
-	var azureCreds []map[string]string
+func getCreds(req *fnv1.RunFunctionRequest) (interface{}, error) {
 	rawCreds := req.GetCredentials()
 
 	if credsData, ok := rawCreds["azure-creds"]; ok {
 		credsData := credsData.GetCredentialData().GetData()
 		if credsJSON, ok := credsData["credentials"]; ok {
-			// Try to unmarshal as array of service principals first
-			if err := json.Unmarshal(credsJSON, &azureCreds); err == nil && len(azureCreds) > 0 {
-				// Note: subscriptionId is optional in credentials
-				// Service principals without subscriptionId will query all accessible subscriptions in the tenant
-				return azureCreds, nil
+			// Try to parse as array of service principals first
+			var servicePrincipals []map[string]string
+			if err := json.Unmarshal(credsJSON, &servicePrincipals); err == nil && len(servicePrincipals) > 0 {
+				return servicePrincipals, nil
 			}
 
 			// Fallback to single service principal format for backward compatibility
@@ -362,14 +353,13 @@ func getCreds(req *fnv1.RunFunctionRequest) ([]map[string]string, error) {
 			if err := json.Unmarshal(credsJSON, &singleCred); err != nil {
 				return nil, errors.Wrap(err, "cannot parse json credentials")
 			}
-			// Convert single credential to array format for backward compatibility
-			azureCreds = []map[string]string{singleCred}
+			return singleCred, nil
 		}
 	} else {
 		return nil, errors.New("failed to get azure-creds credentials")
 	}
 
-	return azureCreds, nil
+	return nil, nil
 }
 
 // AzureQuery is a concrete implementation of the AzureQueryInterface
@@ -377,32 +367,56 @@ func getCreds(req *fnv1.RunFunctionRequest) ([]map[string]string, error) {
 type AzureQuery struct{}
 
 // azQuery is a concrete implementation that interacts with Azure Resource Graph API.
-func (a *AzureQuery) azQuery(ctx context.Context, azureCreds []map[string]string, in *v1beta1.Input, log logging.Logger) (armresourcegraph.ClientResourcesResponse, error) {
-	if len(azureCreds) == 0 {
-		return armresourcegraph.ClientResourcesResponse{}, errors.New("no Azure credentials provided")
-	}
+func (a *AzureQuery) azQuery(ctx context.Context, azureCreds interface{}, in *v1beta1.Input, log logging.Logger) (armresourcegraph.ClientResourcesResponse, error) {
+	var selectedCreds map[string]string
+	var totalCredentialSets int
+	var index int
+	var allSubscriptionIDs []string
 
-	// Round-robin selection for service principals to avoid throttling
-	index := atomic.AddUint64(&servicePrincipalCounter, 1) % uint64(len(azureCreds))
-	selectedCreds := azureCreds[index]
+	// Handle different credential formats and extract subscription IDs in one place
+	switch v := azureCreds.(type) {
+	case map[string]string:
+		// Single service principal
+		selectedCreds = v
+		totalCredentialSets = 1
+		index = 0
+		log.Debug("Single service principal mode")
+
+		// Extract subscription ID if present
+		if subID, exists := v["subscriptionId"]; exists && subID != "" {
+			allSubscriptionIDs = append(allSubscriptionIDs, subID)
+		}
+
+	case []map[string]string:
+		// Multiple service principals - use round-robin selection
+		if len(v) == 0 {
+			return armresourcegraph.ClientResourcesResponse{}, errors.New("no Azure credentials provided")
+		}
+		index = int(atomic.AddUint64(&servicePrincipalCounter, 1) % uint64(len(v)))
+		selectedCreds = v[index]
+		totalCredentialSets = len(v)
+		log.Debug("Multiple service principals mode")
+
+		// Extract subscription IDs from all service principals
+		for _, cred := range v {
+			if subID, exists := cred["subscriptionId"]; exists && subID != "" {
+				allSubscriptionIDs = append(allSubscriptionIDs, subID)
+			}
+		}
+
+	default:
+		return armresourcegraph.ClientResourcesResponse{}, errors.New("invalid credential format")
+	}
 
 	tenantID := selectedCreds["tenantId"]
 	clientID := selectedCreds["clientId"]
 	clientSecret := selectedCreds["clientSecret"]
 
-	// Collect all subscription IDs from all credential sets (subscriptionId is optional)
-	var allSubscriptionIDs []string
-	for _, cred := range azureCreds {
-		if subID, exists := cred["subscriptionId"]; exists && subID != "" {
-			allSubscriptionIDs = append(allSubscriptionIDs, subID)
-		}
-	}
-
 	// Log credential information using structured logging (without sensitive data)
 	log.Debug("Selected service principal",
 		"index", index,
 		"clientId", clientID,
-		"totalCredentialSets", len(azureCreds))
+		"totalCredentialSets", totalCredentialSets)
 
 	// To configure DefaultAzureCredential to authenticate a user-assigned managed identity,
 	// set the environment variable AZURE_CLIENT_ID to the identity's client ID.
