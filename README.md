@@ -1,4 +1,4 @@
-# function-azresourcegraph
+ # function-azresourcegraph
 [![CI](https://github.com/upbound/function-azresourcegraph/actions/workflows/ci.yml/badge.svg)](https://github.com/upbound/function-azresourcegraph/actions/workflows/ci.yml)
 
 A function to query [Azure Resource Graph][azresourcegraph]
@@ -149,6 +149,56 @@ subscriptionsRef: status.subscriptions
 ```yaml
 subscriptionsRef: "context.[apiextensions.crossplane.io/environment].subscriptions"
 ```
+
+## Round-robin Service Principal Authentication
+
+To further mitigate Azure ARM throttling, you can now use multiple service principals with automatic round-robin selection. This distributes load across multiple identities and reduces the likelihood of hitting rate limits.
+
+### Multiple Service Principals
+
+Configure multiple service principals in your credentials secret as a JSON array:
+
+```yaml
+credentials:
+  - name: azure-creds
+    source: Secret
+    secretRef:
+      namespace: upbound-system
+      name: azure-account-creds
+```
+
+With the secret containing:
+
+```json
+[
+  {
+    "subscriptionId": "sub-id",
+    "tenantId": "tenant-id",
+    "clientId": "client-1",
+    "clientSecret": "secret-1"
+  },
+  {
+    "subscriptionId": "sub-id",
+    "tenantId": "tenant-id",
+    "clientId": "client-2",
+    "clientSecret": "secret-2"
+  }
+]
+```
+
+### How Round-Robin Works
+
+- Each reconciliation cycle automatically selects the next service principal
+- Load is distributed evenly across all configured service principals
+- The function cycles through: SP-0 → SP-1 → SP-2 → SP-0 → SP-1 → SP-2...
+- Single service principal format is still supported for backward compatibility
+
+### Benefits
+
+- **Prevents Throttling**: Distributes API calls across multiple service principals
+- **Load Balancing**: Evenly distributes workload
+- **Easy Scaling**: Add more service principals without code changes
+- **Backward Compatible**: Existing single service principal configurations work unchanged
 
 [azresourcegraph]: https://learn.microsoft.com/en-us/azure/governance/resource-graph/
 [azop]: https://marketplace.upbound.io/providers/upbound/provider-family-azure/latest
