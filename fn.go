@@ -366,47 +366,90 @@ func getCreds(req *fnv1.RunFunctionRequest) (interface{}, error) {
 // that interacts with Azure Resource Graph API.
 type AzureQuery struct{}
 
+// handleSingleServicePrincipal handles the case of a single service principal
+func (a *AzureQuery) handleSingleServicePrincipal(creds map[string]string, log logging.Logger) (map[string]string, []string, bool) {
+	allSubscriptionIDs := []string{}
+
+	// Extract subscription ID if present
+	if subID, exists := creds["subscriptionId"]; exists && subID != "" {
+		allSubscriptionIDs = append(allSubscriptionIDs, subID)
+	}
+
+	log.Debug("Single service principal mode")
+	return creds, allSubscriptionIDs, false
+}
+
+// handleMultipleServicePrincipals handles the case of multiple service principals
+func (a *AzureQuery) handleMultipleServicePrincipals(creds []map[string]string, log logging.Logger) (map[string]string, []string, bool, error) {
+	if len(creds) == 0 {
+		return nil, nil, false, errors.New("no Azure credentials provided")
+	}
+
+	// Use round-robin selection with uint64 to avoid overflow conversion issues
+	index := atomic.AddUint64(&servicePrincipalCounter, 1) % uint64(len(creds))
+	selectedCreds := creds[index]
+	allSubscriptionIDs := []string{}
+
+	// Extract subscription IDs from all service principals
+	for _, cred := range creds {
+		if subID, exists := cred["subscriptionId"]; exists && subID != "" {
+			allSubscriptionIDs = append(allSubscriptionIDs, subID)
+		}
+	}
+
+	log.Debug("Multiple service principals mode")
+	return selectedCreds, allSubscriptionIDs, true, nil
+}
+
+// setupQueryRequest configures the query request with subscriptions and management groups
+func (a *AzureQuery) setupQueryRequest(in *v1beta1.Input, allSubscriptionIDs []string, log logging.Logger) armresourcegraph.QueryRequest {
+	queryRequest := armresourcegraph.QueryRequest{
+		Query: to.Ptr(in.Query),
+	}
+
+	// Handle subscriptions in the following priority:
+	// 1. Use Subscriptions field from Input if provided (from YAML composition)
+	// 2. Otherwise use subscriptionIDs from credentials if available (subscriptionId is optional)
+	// 3. If no subscriptions specified anywhere, the query will run against the tenant (all accessible subscriptions)
+	switch {
+	case len(in.Subscriptions) > 0:
+		queryRequest.Subscriptions = in.Subscriptions
+		log.Debug("Using subscriptions from input", "subscriptionCount", len(in.Subscriptions))
+	case len(allSubscriptionIDs) > 0:
+		// Convert string slice to []*string for the API
+		subscriptionPtrs := make([]*string, len(allSubscriptionIDs))
+		for i, subID := range allSubscriptionIDs {
+			subscriptionPtrs[i] = to.Ptr(subID)
+		}
+		queryRequest.Subscriptions = subscriptionPtrs
+		log.Debug("Using subscriptions from credentials", "subscriptionCount", len(allSubscriptionIDs))
+	default:
+		// No subscriptions specified in YAML or credentials - query will run against all accessible subscriptions in the tenant
+		log.Debug("No subscriptions specified in YAML or credentials - query will run against all accessible subscriptions in the tenant")
+	}
+
+	if len(in.ManagementGroups) > 0 {
+		queryRequest.ManagementGroups = in.ManagementGroups
+	}
+
+	return queryRequest
+}
+
 // azQuery is a concrete implementation that interacts with Azure Resource Graph API.
 func (a *AzureQuery) azQuery(ctx context.Context, azureCreds interface{}, in *v1beta1.Input, log logging.Logger) (armresourcegraph.ClientResourcesResponse, error) {
 	var selectedCreds map[string]string
-	var totalCredentialSets int
-	var index int
 	var allSubscriptionIDs []string
-	var multipleCredentialsMode bool
 
-	// Handle different credential formats and extract subscription IDs in one place
+	// Handle different credential formats and extract subscription IDs
 	switch v := azureCreds.(type) {
 	case map[string]string:
-		// Single service principal
-		selectedCreds = v
-		totalCredentialSets = 1
-		index = 0
-		multipleCredentialsMode = false
-		log.Debug("Single service principal mode")
-
-		// Extract subscription ID if present
-		if subID, exists := v["subscriptionId"]; exists && subID != "" {
-			allSubscriptionIDs = append(allSubscriptionIDs, subID)
-		}
-
+		selectedCreds, allSubscriptionIDs, _ = a.handleSingleServicePrincipal(v, log)
 	case []map[string]string:
-		// Multiple service principals - use round-robin selection
-		if len(v) == 0 {
-			return armresourcegraph.ClientResourcesResponse{}, errors.New("no Azure credentials provided")
+		var err error
+		selectedCreds, allSubscriptionIDs, _, err = a.handleMultipleServicePrincipals(v, log)
+		if err != nil {
+			return armresourcegraph.ClientResourcesResponse{}, err
 		}
-		index = int(atomic.AddUint64(&servicePrincipalCounter, 1) % uint64(len(v)))
-		selectedCreds = v[index]
-		totalCredentialSets = len(v)
-		multipleCredentialsMode = true
-		log.Debug("Multiple service principals mode")
-
-		// Extract subscription IDs from all service principals
-		for _, cred := range v {
-			if subID, exists := cred["subscriptionId"]; exists && subID != "" {
-				allSubscriptionIDs = append(allSubscriptionIDs, subID)
-			}
-		}
-
 	default:
 		return armresourcegraph.ClientResourcesResponse{}, errors.New("invalid credential format")
 	}
@@ -416,19 +459,10 @@ func (a *AzureQuery) azQuery(ctx context.Context, azureCreds interface{}, in *v1
 	clientSecret := selectedCreds["clientSecret"]
 
 	// Log credential information using structured logging (without sensitive data)
-	if multipleCredentialsMode {
-		log.Debug("Selected service principal",
-			"index", index,
-			"clientId", clientID,
-			"totalCredentialSets", totalCredentialSets)
-	} else {
-		log.Debug("Selected service principal",
-			"clientId", clientID)
-	}
+	log.Debug("Selected service principal", "clientId", clientID)
 
 	// To configure DefaultAzureCredential to authenticate a user-assigned managed identity,
 	// set the environment variable AZURE_CLIENT_ID to the identity's client ID.
-
 	cred, err := azidentity.NewClientSecretCredential(tenantID, clientID, clientSecret, nil)
 	if err != nil {
 		return armresourcegraph.ClientResourcesResponse{}, errors.Wrap(err, "failed to obtain credentials")
@@ -440,33 +474,8 @@ func (a *AzureQuery) azQuery(ctx context.Context, azureCreds interface{}, in *v1
 		return armresourcegraph.ClientResourcesResponse{}, errors.Wrap(err, "failed to create client")
 	}
 
-	queryRequest := armresourcegraph.QueryRequest{
-		Query: to.Ptr(in.Query),
-	}
-
-	// Handle subscriptions in the following priority:
-	// 1. Use Subscriptions field from Input if provided (from YAML composition)
-	// 2. Otherwise use subscriptionIDs from credentials if available (subscriptionId is optional)
-	// 3. If no subscriptions specified anywhere, the query will run against the tenant (all accessible subscriptions)
-	if len(in.Subscriptions) > 0 {
-		queryRequest.Subscriptions = in.Subscriptions
-		log.Debug("Using subscriptions from input", "subscriptionCount", len(in.Subscriptions))
-	} else if len(allSubscriptionIDs) > 0 {
-		// Convert string slice to []*string for the API
-		subscriptionPtrs := make([]*string, len(allSubscriptionIDs))
-		for i, subID := range allSubscriptionIDs {
-			subscriptionPtrs[i] = to.Ptr(subID)
-		}
-		queryRequest.Subscriptions = subscriptionPtrs
-		log.Debug("Using subscriptions from credentials", "subscriptionCount", len(allSubscriptionIDs))
-	} else {
-		// No subscriptions specified in YAML or credentials - query will run against all accessible subscriptions in the tenant
-		log.Debug("No subscriptions specified in YAML or credentials - query will run against all accessible subscriptions in the tenant")
-	}
-
-	if len(in.ManagementGroups) > 0 {
-		queryRequest.ManagementGroups = in.ManagementGroups
-	}
+	// Setup the query request
+	queryRequest := a.setupQueryRequest(in, allSubscriptionIDs, log)
 
 	// Create the query request, Run the query and get the results.
 	results, err := client.Resources(ctx, queryRequest, nil)
