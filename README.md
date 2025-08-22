@@ -1,4 +1,4 @@
- # function-azresourcegraph
+# function-azresourcegraph
 [![CI](https://github.com/upbound/function-azresourcegraph/actions/workflows/ci.yml/badge.svg)](https://github.com/upbound/function-azresourcegraph/actions/workflows/ci.yml)
 
 A function to query [Azure Resource Graph][azresourcegraph]
