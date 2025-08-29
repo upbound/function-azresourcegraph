@@ -27,6 +27,19 @@ import (
 // Round-robin counter for service principal selection
 var servicePrincipalCounter uint64
 
+const (
+	// SubscriptionID defines the azure credentials key for subscription id
+	SubscriptionID = "subscriptionId"
+	// TenantID defines the azure credentials key for tenant id
+	TenantID = "tenantId"
+	// ClientID defines the azure credentials key for client id
+	ClientID = "clientId"
+	// ClientSecret defines the azure credentials key for client secret
+	ClientSecret = "clientSecret"
+	// WorkloadIdentityCredentialPath defines the azure credentials key for federated token file path
+	WorkloadIdentityCredentialPath = "federatedTokenFile"
+)
+
 // AzureQueryInterface defines the methods required for querying Azure resources.
 type AzureQueryInterface interface {
 	azQuery(ctx context.Context, azureCreds interface{}, in *v1beta1.Input, log logging.Logger) (armresourcegraph.ClientResourcesResponse, error)
@@ -371,7 +384,7 @@ func (a *AzureQuery) handleSingleServicePrincipal(creds map[string]string, log l
 	allSubscriptionIDs := []string{}
 
 	// Extract subscription ID if present
-	if subID, exists := creds["subscriptionId"]; exists && subID != "" {
+	if subID, exists := creds[SubscriptionID]; exists && subID != "" {
 		allSubscriptionIDs = append(allSubscriptionIDs, subID)
 	}
 
@@ -392,7 +405,7 @@ func (a *AzureQuery) handleMultipleServicePrincipals(creds []map[string]string, 
 
 	// Extract subscription IDs from all service principals
 	for _, cred := range creds {
-		if subID, exists := cred["subscriptionId"]; exists && subID != "" {
+		if subID, exists := cred[SubscriptionID]; exists && subID != "" {
 			allSubscriptionIDs = append(allSubscriptionIDs, subID)
 		}
 	}
@@ -436,16 +449,24 @@ func (a *AzureQuery) setupQueryRequest(in *v1beta1.Input, allSubscriptionIDs []s
 }
 
 // azQuery is a concrete implementation that interacts with Azure Resource Graph API.
-func (a *AzureQuery) azQuery(ctx context.Context, azureCreds interface{}, in *v1beta1.Input, log logging.Logger) (armresourcegraph.ClientResourcesResponse, error) {
+func (a *AzureQuery) azQuery(ctx context.Context, azureCreds interface{}, in *v1beta1.Input, log logging.Logger) (results armresourcegraph.ClientResourcesResponse, err error) { //nolint:gocyclo // complexity can not be reduced as it's a result of choosing correct identity and credentials for it
 	var selectedCreds map[string]string
 	var allSubscriptionIDs []string
+	var client *armresourcegraph.Client
+	identityType := v1beta1.IdentityTypeAzureServicePrincipalCredentials
+
+	if in.Identity != nil && in.Identity.Type != "" {
+		identityType = in.Identity.Type
+	}
 
 	// Handle different credential formats and extract subscription IDs
 	switch v := azureCreds.(type) {
 	case map[string]string:
 		selectedCreds, allSubscriptionIDs, _ = a.handleSingleServicePrincipal(v, log)
 	case []map[string]string:
-		var err error
+		if identityType == v1beta1.IdentityTypeAzureWorkloadIdentityCredentials {
+			return armresourcegraph.ClientResourcesResponse{}, errors.New("invalid credential format: workload identity support only one credentials entry")
+		}
 		selectedCreds, allSubscriptionIDs, _, err = a.handleMultipleServicePrincipals(v, log)
 		if err != nil {
 			return armresourcegraph.ClientResourcesResponse{}, err
@@ -454,35 +475,85 @@ func (a *AzureQuery) azQuery(ctx context.Context, azureCreds interface{}, in *v1
 		return armresourcegraph.ClientResourcesResponse{}, errors.New("invalid credential format")
 	}
 
-	tenantID := selectedCreds["tenantId"]
-	clientID := selectedCreds["clientId"]
-	clientSecret := selectedCreds["clientSecret"]
-
-	// Log credential information using structured logging (without sensitive data)
-	log.Debug("Selected service principal", "clientId", clientID)
-
-	// To configure DefaultAzureCredential to authenticate a user-assigned managed identity,
-	// set the environment variable AZURE_CLIENT_ID to the identity's client ID.
-	cred, err := azidentity.NewClientSecretCredential(tenantID, clientID, clientSecret, nil)
-	if err != nil {
-		return armresourcegraph.ClientResourcesResponse{}, errors.Wrap(err, "failed to obtain credentials")
-	}
-
-	// Create and authorize a ResourceGraph client
-	client, err := armresourcegraph.NewClient(cred, nil)
-	if err != nil {
-		return armresourcegraph.ClientResourcesResponse{}, errors.Wrap(err, "failed to create client")
+	switch identityType {
+	case v1beta1.IdentityTypeAzureServicePrincipalCredentials:
+		client, err = a.initializeClientSecretProvider(selectedCreds, log)
+		if err != nil {
+			return armresourcegraph.ClientResourcesResponse{}, errors.Wrap(err, "failed to initialize service principal provider")
+		}
+	case v1beta1.IdentityTypeAzureWorkloadIdentityCredentials:
+		client, err = a.initializeWorkloadIdentityProvider(selectedCreds, log)
+		if err != nil {
+			return armresourcegraph.ClientResourcesResponse{}, errors.Wrap(err, "failed to initialize workload identity provider")
+		}
 	}
 
 	// Setup the query request
 	queryRequest := a.setupQueryRequest(in, allSubscriptionIDs, log)
 
 	// Create the query request, Run the query and get the results.
-	results, err := client.Resources(ctx, queryRequest, nil)
+	results, err = client.Resources(ctx, queryRequest, nil)
 	if err != nil {
 		return armresourcegraph.ClientResourcesResponse{}, errors.Wrap(err, "failed to finish the request")
 	}
 	return results, nil
+}
+
+func (a *AzureQuery) initializeWorkloadIdentityProvider(azureCreds map[string]string, log logging.Logger) (*armresourcegraph.Client, error) {
+	options := &azidentity.WorkloadIdentityCredentialOptions{
+		TokenFilePath: azureCreds[WorkloadIdentityCredentialPath],
+	}
+
+	// Defaults to the value of the environment variable AZURE_TENANT_ID
+	tenantID, found := azureCreds[TenantID]
+	if found {
+		options.TenantID = tenantID
+	}
+
+	// Defaults to the value of the environment variable AZURE_CLIENT_ID
+	clientID, found := azureCreds[ClientID]
+	if found {
+		options.ClientID = clientID
+	}
+
+	// Create Azure credential
+	cred, err := azidentity.NewWorkloadIdentityCredential(options)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to obtain workloadidentity credentials")
+	}
+
+	// Create and authorize a ResourceGraph client
+	client, err := armresourcegraph.NewClient(cred, nil)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create client")
+	}
+
+	log.Debug("Selected service principal", "clientId", clientID)
+
+	return client, nil
+}
+
+func (a *AzureQuery) initializeClientSecretProvider(azureCreds map[string]string, log logging.Logger) (*armresourcegraph.Client, error) {
+	tenantID := azureCreds[TenantID]
+	clientID := azureCreds[ClientID]
+	clientSecret := azureCreds[ClientSecret]
+
+	// To configure DefaultAzureCredential to authenticate a user-assigned managed identity,
+	// set the environment variable AZURE_CLIENT_ID to the identity's client ID.
+	cred, err := azidentity.NewClientSecretCredential(tenantID, clientID, clientSecret, nil)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to obtain clientsecret credentials")
+	}
+
+	// Create and authorize a ResourceGraph client
+	client, err := armresourcegraph.NewClient(cred, nil)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to create client")
+	}
+
+	log.Debug("Selected service principal", "clientId", clientID)
+
+	return client, nil
 }
 
 // ParseNestedKey enables the bracket and dot notation to key reference

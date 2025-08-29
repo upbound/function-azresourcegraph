@@ -203,3 +203,109 @@ With the secret containing:
 [azresourcegraph]: https://learn.microsoft.com/en-us/azure/governance/resource-graph/
 [azop]: https://marketplace.upbound.io/providers/upbound/provider-family-azure/latest
 [examples]: ./example
+
+## Workload Identity Authentication
+AKS cluster needs to have workload identity enabled.
+The managed identity needs to have the Federated Identity Credential created: https://azure.github.io/azure-workload-identity/docs/topics/federated-identity-credential.html.
+
+&#x26a0;&#xfe0f;
+Does not support Multiple Service Principals with Round-Robin
+
+### Credentials secret:
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: azure-account-creds
+  namespace: crossplane-system
+type: Opaque
+stringData:
+  credentials: |
+    {
+      "clientId": "your-client-id", # optional, defaults to AZURE_CLIENT_ID injected by Azure Workload Identity
+      "tenantId": "your-tenant-id", # optional, defaults to AZURE_TENANT_ID injected by Azure Workload Identity
+      "subscriptionId": "your-subscription-id" # optional, if both subscriptionId and Explicit Subscriptions scope is not defined defaults to tenant-scope search
+      "federatedTokenFile": "/var/run/secrets/azure/tokens/azure-identity-token"
+    }
+```
+
+#### Function
+```yaml
+apiVersion: pkg.crossplane.io/v1
+kind: Function
+metadata:
+  name: upbound-function-azresourcegraph
+spec:
+  package: xpkg.upbound.io/upbound/function-azresourcegraph:v0.10.0
+  runtimeConfigRef:
+    apiVersion: pkg.crossplane.io/v1beta1
+    kind: DeploymentRuntimeConfig
+    name: upbound-function-azresourcegraph
+```
+
+#### DeploymentRuntimeConfig
+```yaml
+apiVersion: pkg.crossplane.io/v1beta1
+kind: DeploymentRuntimeConfig
+metadata:
+  name: upbound-function-azresourcegraph
+spec: 
+  deploymentTemplate:
+    spec:
+      selector:
+        matchLabels:
+          azure.workload.identity/use: "true"
+          pkg.crossplane.io/function: "upbound-function-azresourcegraph"
+      template:
+        metadata:
+          labels:
+            azure.workload.identity/use: "true"
+            pkg.crossplane.io/function: "upbound-function-azresourcegraph"
+        spec:
+          containers:
+          - name: package-runtime
+            volumeMounts:
+            - mountPath: /var/run/secrets/azure/tokens
+              name: azure-identity-token
+              readOnly: true
+          serviceAccountName: "upbound-function-azresourcegraph"
+          volumes:
+          - name: azure-identity-token
+            projected:
+              sources:
+              - serviceAccountToken:
+                  audience: api://AzureADTokenExchange
+                  expirationSeconds: 3600
+                  path: azure-identity-token
+  serviceAccountTemplate:
+    metadata:
+      annotations:
+        azure.workload.identity/client-id: "your-client-id"
+      name: "upbound-function-azresourcegraph"
+```
+
+## Using Different Credentials
+
+### Using ServicePrincipal credentials
+
+#### Explicitly
+```yaml
+apiVersion: azresourcegraph.fn.crossplane.io/v1beta1
+kind: Input
+identity:
+  type: AzureServicePrincipalCredentials
+```
+
+#### Default
+```yaml
+apiVersion: azresourcegraph.fn.crossplane.io/v1beta1
+kind: Input
+```
+
+### Using Workload Identity Credentials
+```yaml
+apiVersion: azresourcegraph.fn.crossplane.io/v1beta1
+kind: Input
+identity:
+  type: AzureWorkloadIdentityCredentials
+```
