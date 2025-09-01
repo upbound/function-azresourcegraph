@@ -477,11 +477,13 @@ func (a *AzureQuery) azQuery(ctx context.Context, azureCreds interface{}, in *v1
 
 	switch identityType {
 	case v1beta1.IdentityTypeAzureServicePrincipalCredentials:
+		log.Info("Using authentication method", "identityType", v1beta1.IdentityTypeAzureServicePrincipalCredentials)
 		client, err = a.initializeClientSecretProvider(selectedCreds, log)
 		if err != nil {
 			return armresourcegraph.ClientResourcesResponse{}, errors.Wrap(err, "failed to initialize service principal provider")
 		}
 	case v1beta1.IdentityTypeAzureWorkloadIdentityCredentials:
+		log.Info("Using authentication method", "identityType", v1beta1.IdentityTypeAzureWorkloadIdentityCredentials)
 		client, err = a.initializeWorkloadIdentityProvider(selectedCreds, log)
 		if err != nil {
 			return armresourcegraph.ClientResourcesResponse{}, errors.Wrap(err, "failed to initialize workload identity provider")
@@ -500,8 +502,10 @@ func (a *AzureQuery) azQuery(ctx context.Context, azureCreds interface{}, in *v1
 }
 
 func (a *AzureQuery) initializeWorkloadIdentityProvider(azureCreds map[string]string, log logging.Logger) (*armresourcegraph.Client, error) {
+	tokenFilePath := azureCreds[WorkloadIdentityCredentialPath]
+
 	options := &azidentity.WorkloadIdentityCredentialOptions{
-		TokenFilePath: azureCreds[WorkloadIdentityCredentialPath],
+		TokenFilePath: tokenFilePath,
 	}
 
 	// Defaults to the value of the environment variable AZURE_TENANT_ID
@@ -517,6 +521,8 @@ func (a *AzureQuery) initializeWorkloadIdentityProvider(azureCreds map[string]st
 	}
 
 	// Create Azure credential
+	log.Info("Initializing workload identity provider", "tokenFile", tokenFilePath)
+
 	cred, err := azidentity.NewWorkloadIdentityCredential(options)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to obtain workloadidentity credentials")
