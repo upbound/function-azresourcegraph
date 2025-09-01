@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/durationpb"
 
+	"github.com/crossplane/crossplane-runtime/pkg/errors"
 	"github.com/crossplane/crossplane-runtime/pkg/logging"
 	fnv1 "github.com/crossplane/function-sdk-go/proto/v1"
 	"github.com/crossplane/function-sdk-go/resource"
@@ -2793,6 +2794,270 @@ func TestRunFunction(t *testing.T) {
 				if diff := cmp.Diff(tc.want.rsp, rsp, protocmp.Transform()); diff != "" {
 					t.Errorf("%s\nf.RunFunction(...): -want rsp, +got rsp:\n%s", tc.reason, diff)
 				}
+			}
+
+			if diff := cmp.Diff(tc.want.err, err, cmpopts.EquateErrors()); diff != "" {
+				t.Errorf("%s\nf.RunFunction(...): -want err, +got err:\n%s", tc.reason, diff)
+			}
+		})
+	}
+}
+
+func TestIdentityType(t *testing.T) {
+	var (
+		xr      = `{"apiVersion":"example.org/v1","kind":"XR","metadata":{"name":"cool-xr"}}`
+		spInput = `{
+	"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+	"kind": "Input",
+	"query": "Resources| count",
+	"target": "status.azResourceGraphQueryResult"
+}`
+		wiInput = `{
+	"apiVersion": "azresourcegraph.fn.crossplane.io/v1beta1",
+	"kind": "Input",
+	"query": "Resources| count",
+	"target": "status.azResourceGraphQueryResult",
+	"identity": {
+		"type": "AzureWorkloadIdentityCredentials"
+	}
+}`
+		servicePrincipalCreds = &fnv1.CredentialData{
+			Data: map[string][]byte{
+				"credentials": []byte(`{
+"clientId": "test-client-id",
+"clientSecret": "test-client-secret",
+"subscriptionId": "test-subscription-id",
+"tenantId": "test-tenant-id"
+}`),
+			},
+		}
+		workloadIdentityCredentials = &fnv1.CredentialData{
+			Data: map[string][]byte{
+				"credentials": []byte(`{
+"federatedTokenFile": "/var/run/secrets/azure/tokens/azure-identity-token",
+"subscriptionId": "test-subscription-id"
+}`),
+			},
+		}
+		multipleWorkloadIdentityCredentials = &fnv1.CredentialData{
+			Data: map[string][]byte{
+				"credentials": []byte(`[
+	{
+		"federatedTokenFile": "/var/run/secrets/azure/tokens/azure-identity-token",
+		"subscriptionId": "sub-id"
+	},
+	{
+		"federatedTokenFile": "/var/run/secrets/azure/tokens/azure-identity-token",
+		"subscriptionId": "sub-id2"
+	}
+]`),
+			},
+		}
+	)
+
+	type args struct {
+		ctx context.Context
+		req *fnv1.RunFunctionRequest
+	}
+	type want struct {
+		rsp *fnv1.RunFunctionResponse
+		err error
+	}
+
+	cases := map[string]struct {
+		reason string
+		args   args
+		want   want
+	}{
+		"AzureServicePrincipalCredentialsImplicit": {
+			reason: "The Function should default to identity.type AzureServicePrincipalCredentials",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:  &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(spInput),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: servicePrincipalCreds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_FATAL,
+							Message:  `failed to initialize service principal provider: failed to obtain clientsecret credentials`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+				},
+			},
+		},
+		"AzureServicePrincipalCredentialsExplicit": {
+			reason: "The Function should use ServicePrincipal credentials if identity.type is AzureServicePrincipalCredentials",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:  &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(spInput),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: servicePrincipalCreds},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_FATAL,
+							Message:  `failed to initialize service principal provider: failed to obtain clientsecret credentials`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+				},
+			},
+		},
+		"AzureWorkloadIdentityCredentialsMultipleCredentials": {
+			reason: "The Function should failt if identity.type is AzureWorkloadIdentityCredentials and credentials array has multiple entries",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:  &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(wiInput),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: multipleWorkloadIdentityCredentials},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_FATAL,
+							Message:  `invalid credential format: workload identity support only one credentials entry`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+				},
+			},
+		},
+		"AzureWorkloadIdentityCredentialsValid": {
+			reason: "The Function should use Workload Identity credentials if identity.type is AzureWorkloadIdentityCredentials",
+			args: args{
+				ctx: context.Background(),
+				req: &fnv1.RunFunctionRequest{
+					Meta:  &fnv1.RequestMeta{Tag: "hello"},
+					Input: resource.MustStructJSON(wiInput),
+					Observed: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+					Credentials: map[string]*fnv1.Credentials{
+						"azure-creds": {
+							Source: &fnv1.Credentials_CredentialData{CredentialData: workloadIdentityCredentials},
+						},
+					},
+				},
+			},
+			want: want{
+				rsp: &fnv1.RunFunctionResponse{
+					Meta: &fnv1.ResponseMeta{Tag: "hello", Ttl: durationpb.New(response.DefaultTTL)},
+					Results: []*fnv1.Result{
+						{
+							Severity: fnv1.Severity_SEVERITY_FATAL,
+							Message:  `failed to initialize workload identity provider: failed to obtain workloadidentity credentials`,
+							Target:   fnv1.Target_TARGET_COMPOSITE.Enum(),
+						},
+					},
+					Desired: &fnv1.State{
+						Composite: &fnv1.Resource{
+							Resource: resource.MustStructJSON(xr),
+						},
+					},
+				},
+			},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			// Create mock responders for each type of query
+			mockQuery := &MockAzureQuery{
+				AzQueryFunc: func(_ context.Context, credentials interface{}, in *v1beta1.Input, _ logging.Logger) (armresourcegraph.ClientResourcesResponse, error) {
+					identityType := v1beta1.IdentityTypeAzureServicePrincipalCredentials
+
+					if in.Identity != nil && in.Identity.Type != "" {
+						identityType = in.Identity.Type
+					}
+
+					switch credentials.(type) {
+					case map[string]string:
+					case []map[string]string:
+						if identityType == v1beta1.IdentityTypeAzureWorkloadIdentityCredentials {
+							return armresourcegraph.ClientResourcesResponse{}, errors.New("invalid credential format: workload identity support only one credentials entry")
+						}
+					default:
+						return armresourcegraph.ClientResourcesResponse{}, errors.New("invalid credential format")
+					}
+
+					switch identityType {
+					case v1beta1.IdentityTypeAzureWorkloadIdentityCredentials:
+						return armresourcegraph.ClientResourcesResponse{}, errors.New("failed to initialize workload identity provider: failed to obtain workloadidentity credentials")
+					case v1beta1.IdentityTypeAzureServicePrincipalCredentials:
+						return armresourcegraph.ClientResourcesResponse{}, errors.New("failed to initialize service principal provider: failed to obtain clientsecret credentials")
+					default:
+						return armresourcegraph.ClientResourcesResponse{}, errors.Errorf("unsupported identity.type: %s", string(identityType))
+					}
+				},
+			}
+
+			f := &Function{
+				azureQuery: mockQuery,
+				log:        logging.NewNopLogger(),
+			}
+			rsp, err := f.RunFunction(tc.args.ctx, tc.args.req)
+
+			if diff := cmp.Diff(tc.want.rsp, rsp, protocmp.Transform()); diff != "" {
+				t.Errorf("%s\nf.RunFunction(...): -want rsp, +got rsp:\n%s", tc.reason, diff)
 			}
 
 			if diff := cmp.Diff(tc.want.err, err, cmpopts.EquateErrors()); diff != "" {
