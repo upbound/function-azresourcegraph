@@ -14,11 +14,11 @@ kind: Function
 metadata:
   name: function-kcl
 spec:
-  package: xpkg.upbound.io/crossplane-contrib/function-kcl:v0.11.5
+  package: xpkg.upbound.io/crossplane-contrib/function-kcl:v0.11.6
 ---
 apiVersion: pkg.crossplane.io/v1beta1
 kind: Function
 metadata:
   name: function-auto-ready
 spec:
-  package: xpkg.upbound.io/crossplane-contrib/function-auto-ready:v0.5.1
+  package: xpkg.upbound.io/crossplane-contrib/function-auto-ready:v0.5.2
