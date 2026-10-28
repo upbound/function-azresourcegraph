@@ -30,6 +30,30 @@ Example pipeline step:
 The Azure Credentials Secret structure is fully compatible with the standard
 [Azure Official Provider][azop]
 
+### Sovereign clouds
+
+The function targets the Azure public cloud unless the credentials say
+otherwise. For Azure Government, Azure China or another cloud, add the endpoint
+URLs that `az ad sp create-for-rbac --sdk-auth` prints to the credentials JSON;
+they apply to service principal and workload identity credentials alike:
+
+```json
+{
+  "clientId": "your-client-id",
+  "clientSecret": "your-client-secret",
+  "tenantId": "your-tenant-id",
+  "subscriptionId": "your-subscription-id",
+  "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+  "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+  "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+}
+```
+
+`activeDirectoryEndpointUrl` and `resourceManagerEndpointUrl` select the cloud.
+The public, Government and China endpoints map to the Azure SDK's built-in
+configurations; any other pair is used as given, with `managementEndpointUrl`
+as the token audience when present.
+
 Example XR status after e2e query:
 
 ```yaml
