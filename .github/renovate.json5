@@ -3,6 +3,21 @@
   extends: [
     'config:recommended',
   ],
+  ignorePaths: [
+    // Renovate defaults
+    '**/node_modules/**',
+    '**/bower_components/**',
+    '**/vendor/**',
+    '**/examples/**',
+    '**/__tests__/**',
+    '**/test/**',
+    '**/tests/**',
+    '**/__fixtures__/**',
+    // Synced from upbound/sa-up (gitops/shared-files). Renovate bumps them there;
+    // bumping them here too gets overwritten (and looks like a downgrade) on the next sync.
+    '.github/workflows/ci.yml',
+    '.github/workflows/tag.yml',
+  ],
   crossplane: {
     fileMatch: [
       '(^|/)example/.*\\.ya?ml$',
