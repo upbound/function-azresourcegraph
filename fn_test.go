@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/cloud"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resourcegraph/armresourcegraph"
 	"github.com/google/go-cmp/cmp"
@@ -3161,4 +3162,97 @@ func validateBackwardsCompatibility(rsp *fnv1.RunFunctionResponse) error {
 	}
 
 	return nil
+}
+
+func TestCloudConfiguration(t *testing.T) {
+	custom := cloud.Configuration{
+		ActiveDirectoryAuthorityHost: "https://login.example.test/",
+		Services: map[cloud.ServiceName]cloud.ServiceConfiguration{
+			cloud.ResourceManager: {Audience: "https://management.core.example.test/", Endpoint: "https://management.example.test"},
+		},
+	}
+	customWithoutAudience := cloud.Configuration{
+		ActiveDirectoryAuthorityHost: "https://login.example.test/",
+		Services: map[cloud.ServiceName]cloud.ServiceConfiguration{
+			cloud.ResourceManager: {Audience: "https://management.example.test/", Endpoint: "https://management.example.test"},
+		},
+	}
+
+	cases := map[string]struct {
+		reason  string
+		creds   map[string]string
+		want    cloud.Configuration
+		wantErr bool
+	}{
+		"NoEndpoints": {
+			reason: "Credentials without endpoint URLs keep targeting the public cloud",
+			creds:  map[string]string{ClientID: "client", ClientSecret: "secret", TenantID: "tenant"},
+			want:   cloud.AzurePublic,
+		},
+		"PublicEndpoints": {
+			reason: "The public endpoints map to the SDK's public cloud configuration",
+			creds: map[string]string{
+				ActiveDirectoryEndpointURL: "https://login.microsoftonline.com",
+				ResourceManagerEndpointURL: "https://management.azure.com/",
+				ManagementEndpointURL:      "https://management.core.windows.net/",
+			},
+			want: cloud.AzurePublic,
+		},
+		"Government": {
+			reason: "The Azure Government endpoints map to the SDK's Government configuration",
+			creds: map[string]string{
+				ActiveDirectoryEndpointURL: "https://login.microsoftonline.us",
+				ResourceManagerEndpointURL: "https://management.usgovcloudapi.net/",
+				ManagementEndpointURL:      "https://management.core.usgovcloudapi.net/",
+			},
+			want: cloud.AzureGovernment,
+		},
+		"GovernmentAuthorityOnly": {
+			reason: "One known endpoint is enough to pick the cloud",
+			creds:  map[string]string{ActiveDirectoryEndpointURL: "https://login.microsoftonline.us/"},
+			want:   cloud.AzureGovernment,
+		},
+		"China": {
+			reason: "The Azure China endpoints map to the SDK's China configuration",
+			creds: map[string]string{
+				ActiveDirectoryEndpointURL: "https://login.chinacloudapi.cn",
+				ResourceManagerEndpointURL: "https://management.chinacloudapi.cn/",
+			},
+			want: cloud.AzureChina,
+		},
+		"Custom": {
+			reason: "Unknown endpoints are used as given, with managementEndpointUrl as the token audience",
+			creds: map[string]string{
+				ActiveDirectoryEndpointURL: "https://login.example.test/",
+				ResourceManagerEndpointURL: "https://management.example.test/",
+				ManagementEndpointURL:      "https://management.core.example.test/",
+			},
+			want: custom,
+		},
+		"CustomWithoutAudience": {
+			reason: "Without managementEndpointUrl the Resource Manager endpoint is the audience",
+			creds: map[string]string{
+				ActiveDirectoryEndpointURL: "https://login.example.test/",
+				ResourceManagerEndpointURL: "https://management.example.test/",
+			},
+			want: customWithoutAudience,
+		},
+		"CustomMissingAuthority": {
+			reason:  "An unknown Resource Manager endpoint without its authority is an error rather than a silent public cloud",
+			creds:   map[string]string{ResourceManagerEndpointURL: "https://management.example.test/"},
+			wantErr: true,
+		},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := cloudConfiguration(tc.creds)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("%s\ncloudConfiguration(...): error = %v, wantErr %v", tc.reason, err, tc.wantErr)
+			}
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("%s\ncloudConfiguration(...): -want, +got:\n%s", tc.reason, diff)
+			}
+		})
+	}
 }

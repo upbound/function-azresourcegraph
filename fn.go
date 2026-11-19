@@ -4,11 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/arm"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/cloud"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resourcegraph/armresourcegraph"
@@ -36,6 +40,12 @@ const (
 	ClientID = "clientId"
 	// ClientSecret defines the azure credentials key for client secret
 	ClientSecret = "clientSecret"
+	// ActiveDirectoryEndpointURL defines the azure credentials key for the Entra ID authority of the cloud
+	ActiveDirectoryEndpointURL = "activeDirectoryEndpointUrl"
+	// ResourceManagerEndpointURL defines the azure credentials key for the Resource Manager endpoint of the cloud
+	ResourceManagerEndpointURL = "resourceManagerEndpointUrl"
+	// ManagementEndpointURL defines the azure credentials key for the Resource Manager token audience of the cloud
+	ManagementEndpointURL = "managementEndpointUrl"
 	// WorkloadIdentityCredentialPath defines the azure credentials key for federated token file path
 	WorkloadIdentityCredentialPath = "federatedTokenFile"
 )
@@ -504,7 +514,13 @@ func (a *AzureQuery) azQuery(ctx context.Context, azureCreds interface{}, in *v1
 func (a *AzureQuery) initializeWorkloadIdentityProvider(azureCreds map[string]string, log logging.Logger) (*armresourcegraph.Client, error) {
 	tokenFilePath := azureCreds[WorkloadIdentityCredentialPath]
 
+	cloudConfig, err := cloudConfiguration(azureCreds)
+	if err != nil {
+		return nil, err
+	}
+
 	options := &azidentity.WorkloadIdentityCredentialOptions{
+		ClientOptions: azcore.ClientOptions{Cloud: cloudConfig},
 		TokenFilePath: tokenFilePath,
 	}
 
@@ -521,7 +537,7 @@ func (a *AzureQuery) initializeWorkloadIdentityProvider(azureCreds map[string]st
 	}
 
 	// Create Azure credential
-	log.Info("Initializing workload identity provider", "tokenFile", tokenFilePath)
+	log.Info("Initializing workload identity provider", "tokenFile", tokenFilePath, "authority", cloudConfig.ActiveDirectoryAuthorityHost)
 
 	cred, err := azidentity.NewWorkloadIdentityCredential(options)
 	if err != nil {
@@ -529,7 +545,7 @@ func (a *AzureQuery) initializeWorkloadIdentityProvider(azureCreds map[string]st
 	}
 
 	// Create and authorize a ResourceGraph client
-	client, err := armresourcegraph.NewClient(cred, nil)
+	client, err := armresourcegraph.NewClient(cred, &arm.ClientOptions{ClientOptions: azcore.ClientOptions{Cloud: cloudConfig}})
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create client")
 	}
@@ -544,15 +560,20 @@ func (a *AzureQuery) initializeClientSecretProvider(azureCreds map[string]string
 	clientID := azureCreds[ClientID]
 	clientSecret := azureCreds[ClientSecret]
 
+	cloudConfig, err := cloudConfiguration(azureCreds)
+	if err != nil {
+		return nil, err
+	}
+
 	// To configure DefaultAzureCredential to authenticate a user-assigned managed identity,
 	// set the environment variable AZURE_CLIENT_ID to the identity's client ID.
-	cred, err := azidentity.NewClientSecretCredential(tenantID, clientID, clientSecret, nil)
+	cred, err := azidentity.NewClientSecretCredential(tenantID, clientID, clientSecret, &azidentity.ClientSecretCredentialOptions{ClientOptions: azcore.ClientOptions{Cloud: cloudConfig}})
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to obtain clientsecret credentials")
 	}
 
 	// Create and authorize a ResourceGraph client
-	client, err := armresourcegraph.NewClient(cred, nil)
+	client, err := armresourcegraph.NewClient(cred, &arm.ClientOptions{ClientOptions: azcore.ClientOptions{Cloud: cloudConfig}})
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create client")
 	}
@@ -985,4 +1006,53 @@ func (f *Function) checkContextTargetHasData(req *fnv1.RunFunctionRequest, in *v
 		return true
 	}
 	return false
+}
+
+// cloudConfiguration selects the Azure cloud from the endpoint URLs that
+// `az ad sp create-for-rbac --sdk-auth` writes into the credentials. Without
+// them the public cloud is used. The public, Government and China endpoints
+// map to the SDK's own configurations; any other pair is used as given.
+func cloudConfiguration(azureCreds map[string]string) (cloud.Configuration, error) {
+	authority := azureCreds[ActiveDirectoryEndpointURL]
+	manager := azureCreds[ResourceManagerEndpointURL]
+	if authority == "" && manager == "" {
+		return cloud.AzurePublic, nil
+	}
+
+	for _, known := range []cloud.Configuration{cloud.AzurePublic, cloud.AzureGovernment, cloud.AzureChina} {
+		if sameHost(authority, known.ActiveDirectoryAuthorityHost) && sameHost(manager, known.Services[cloud.ResourceManager].Endpoint) {
+			return known, nil
+		}
+	}
+
+	if authority == "" || manager == "" {
+		return cloud.Configuration{}, errors.Errorf("both %s and %s are required for a cloud the SDK does not know", ActiveDirectoryEndpointURL, ResourceManagerEndpointURL)
+	}
+	audience := azureCreds[ManagementEndpointURL]
+	if audience == "" {
+		audience = manager
+	}
+	return cloud.Configuration{
+		ActiveDirectoryAuthorityHost: authority,
+		Services: map[cloud.ServiceName]cloud.ServiceConfiguration{
+			cloud.ResourceManager: {Audience: audience, Endpoint: strings.TrimSuffix(manager, "/")},
+		},
+	}, nil
+}
+
+// sameHost reports whether the given URL names the same host as the known
+// one. An unset URL matches, so that one endpoint is enough to pick a cloud.
+func sameHost(given, known string) bool {
+	if given == "" {
+		return true
+	}
+	g, err := url.Parse(given)
+	if err != nil {
+		return false
+	}
+	k, err := url.Parse(known)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(g.Host, k.Host)
 }
