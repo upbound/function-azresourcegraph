@@ -7,7 +7,7 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.15.0
 	github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resourcegraph/armresourcegraph v0.10.0
 	github.com/alecthomas/kong v1.17.0
-	github.com/crossplane/crossplane-runtime/v2 v2.2.0
+	github.com/crossplane/crossplane-runtime/v2 v2.4.3
 	github.com/crossplane/function-sdk-go v0.6.2
 	github.com/google/go-cmp v0.7.0
 	google.golang.org/protobuf v1.36.12
