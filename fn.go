@@ -39,6 +39,8 @@ const (
 	ClientSecret = "clientSecret"
 	// WorkloadIdentityCredentialPath defines the azure credentials key for federated token file path
 	WorkloadIdentityCredentialPath = "federatedTokenFile"
+	// DefaultMaxResults is the default maximum number of rows written to the target (one Azure Resource Graph page)
+	DefaultMaxResults = 1000
 )
 
 // AzureQueryInterface defines the methods required for querying Azure resources.
@@ -143,6 +145,12 @@ func (f *Function) parseInputAndCredentials(req *fnv1.RunFunctionRequest, rsp *f
 		return nil, nil, err
 	}
 
+	if in.MaxResults != nil && *in.MaxResults < 1 {
+		err := errors.Errorf("maxResults must be at least 1, got %d", *in.MaxResults)
+		response.Fatal(rsp, err)
+		return nil, nil, err
+	}
+
 	azureCreds, err := getCreds(req)
 	if err != nil {
 		response.Fatal(rsp, err)
@@ -179,6 +187,14 @@ func validateIdentity(in *v1beta1.Input) error {
 	default:
 		return errors.Errorf("unsupported identity.type %q: must be %s or %s", in.Identity.Type, v1beta1.IdentityTypeAzureServicePrincipalCredentials, v1beta1.IdentityTypeAzureWorkloadIdentityCredentials)
 	}
+}
+
+// maxResults returns the configured row limit or the default.
+func maxResults(in *v1beta1.Input) int {
+	if in.MaxResults != nil {
+		return *in.MaxResults
+	}
+	return DefaultMaxResults
 }
 
 // resolveQuery resolves the query from a reference if specified.
@@ -372,6 +388,18 @@ func (f *Function) executeQuery(ctx context.Context, azureCreds interface{}, in 
 		response.Fatal(rsp, err)
 		f.log.Info("FAILURE: ", "failure", fmt.Sprint(err))
 		return armresourcegraph.ClientResourcesResponse{}, err
+	}
+
+	if rows, ok := results.Data.([]interface{}); ok {
+		limit := maxResults(in)
+		if len(rows) > limit || skipToken(results) != "" {
+			trimmed := rows[:min(len(rows), limit)]
+			results.Data = trimmed
+			results.Count = to.Ptr(int64(len(trimmed)))
+			err := errors.Errorf("Azure Resource Graph has more rows than maxResults (%d); only the first %d were written, raise maxResults to write more", limit, len(trimmed))
+			response.Warning(rsp, err)
+			f.log.Info("WARNING: ", "maxResults", fmt.Sprint(err))
+		}
 	}
 
 	if isTruncated(results) {
@@ -575,11 +603,11 @@ func (a *AzureQuery) azQuery(ctx context.Context, azureCreds interface{}, in *v1
 	queryRequest := a.setupQueryRequest(in, allSubscriptionIDs, log)
 
 	// Create the query request, Run the query and get the results.
-	return a.queryAllPages(ctx, client, queryRequest, log)
+	return a.queryAllPages(ctx, client, queryRequest, maxResults(in), log)
 }
 
-// queryAllPages runs the query and follows SkipToken until all rows are fetched.
-func (a *AzureQuery) queryAllPages(ctx context.Context, client resourcesClient, req armresourcegraph.QueryRequest, log logging.Logger) (armresourcegraph.ClientResourcesResponse, error) {
+// queryAllPages runs the query and follows SkipToken until all rows or maxRows are fetched.
+func (a *AzureQuery) queryAllPages(ctx context.Context, client resourcesClient, req armresourcegraph.QueryRequest, maxRows int, log logging.Logger) (armresourcegraph.ClientResourcesResponse, error) { //nolint:gocyclo // paging stop conditions are kept in one loop
 	first, err := client.Resources(ctx, req, nil)
 	if err != nil {
 		return armresourcegraph.ClientResourcesResponse{}, errors.Wrap(err, "failed to finish the request")
@@ -593,7 +621,12 @@ func (a *AzureQuery) queryAllPages(ctx context.Context, client resourcesClient, 
 	all := append([]interface{}{}, rows...)
 	truncated := isTruncated(first)
 	page := first
+	next := ""
 	for token := skipToken(page); token != ""; token = skipToken(page) {
+		if len(all) >= maxRows {
+			next = token
+			break
+		}
 		if req.Options == nil {
 			req.Options = &armresourcegraph.QueryRequestOptions{}
 		}
@@ -618,7 +651,11 @@ func (a *AzureQuery) queryAllPages(ctx context.Context, client resourcesClient, 
 		}
 	}
 
-	return aggregatePages(first, all, truncated), nil
+	agg := aggregatePages(first, all, truncated)
+	if next != "" {
+		agg.SkipToken = to.Ptr(next)
+	}
+	return agg, nil
 }
 
 // aggregatePages returns the first page response carrying all rows.

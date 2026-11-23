@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.20.1
+    controller-gen.kubebuilder.io/version: v0.23.0
   name: inputs.azresourcegraph.fn.crossplane.io
 spec:
   group: azresourcegraph.fn.crossplane.io
@@ -56,6 +56,12 @@ spec:
             items:
               type: string
             type: array
+          maxResults:
+            description: |-
+              MaxResults limits the number of rows written to the target.
+              Default is 1000 (one Azure Resource Graph page); set higher to follow paging.
+            minimum: 1
+            type: integer
           metadata:
             type: object
           query:

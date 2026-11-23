@@ -70,6 +70,11 @@ func (in *Input) DeepCopyInto(out *Input) {
 		*out = new(int)
 		**out = **in
 	}
+	if in.MaxResults != nil {
+		in, out := &in.MaxResults, &out.MaxResults
+		*out = new(int)
+		**out = **in
+	}
 	if in.Identity != nil {
 		in, out := &in.Identity, &out.Identity
 		*out = new(Identity)

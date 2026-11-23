@@ -28,7 +28,7 @@ Example pipeline step:
 ```
 
 The function reads the credential named `azure-creds`. The Secret must hold the
-credentials JSON (same JSON as the [Azure Official Provider][azop]) under the key
+credentials JSON (for a single service principal, the same JSON as the [Azure Official Provider][azop]) under the key
 `credentials`. A Secret using another key (e.g. `creds`) is rejected with a fatal result.
 
 Example XR status after e2e query:
@@ -50,7 +50,7 @@ status:
     type: microsoft.compute/virtualmachines
 ```
 
-Results are paged automatically. If Azure Resource Graph reports truncated results that cannot be paged (the query uses limit, take or sample, or all output columns are dynamic or null), the function writes the rows it received and emits a warning. Results are written to the target as-is, so keep them within Kubernetes object size limits, for example by projecting only the columns you need.
+By default the function writes at most 1000 rows (one Azure Resource Graph page) and emits a warning when more rows exist. Set `maxResults` to follow paging further; each page is one Azure Resource Graph call and counts against throttling limits. Results are written to the target as-is (plus the `lastQueryTime` element when `queryIntervalMinutes` is set), so keep them within Kubernetes object size limits, for example by projecting only the columns you need. If Azure Resource Graph reports truncated results that cannot be paged (the query uses limit, take or sample, or all output columns are dynamic or null), the function writes the rows it received and emits a warning.
 
 ### QueryRef
 

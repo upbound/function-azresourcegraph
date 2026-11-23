@@ -3249,6 +3249,16 @@ func TestRunFunctionFixes(t *testing.T) {
 	}
 	truncated := arrayResp
 	truncated.ResultTruncated = to.Ptr(armresourcegraph.ResultTruncatedTrue)
+	rowsResp := func(n int, token *string) armresourcegraph.ClientResourcesResponse {
+		rows := make([]interface{}, n)
+		for i := range rows {
+			rows[i] = map[string]interface{}{"name": fmt.Sprintf("vm%d", i)}
+		}
+		return armresourcegraph.ClientResourcesResponse{QueryResponse: armresourcegraph.QueryResponse{Data: rows, SkipToken: token}}
+	}
+	capWarn := func(limit, written int) string {
+		return fmt.Sprintf("Azure Resource Graph has more rows than maxResults (%d); only the first %d were written, raise maxResults to write more", limit, written)
+	}
 
 	type tc struct {
 		reason    string
@@ -3434,6 +3444,169 @@ func TestRunFunctionFixes(t *testing.T) {
 				if !fixHasCondition(rsp, "FunctionSuccess", "Success") {
 					t.Errorf("want FunctionSuccess, got %v", rsp.GetConditions())
 				}
+				if diff := cmp.Diff([]interface{}{map[string]interface{}{"name": "vm1"}}, fixDesiredStatus(rsp)["result"]); diff != "" {
+					t.Errorf("status target: -want +got:\n%s", diff)
+				}
+			},
+		},
+		"QueryRefDesiredOverObserved": {
+			reason:    "queryRef should resolve to the desired XR status over the observed one",
+			input:     `{` + fixInputHead + `,"queryRef":"status.q"}`,
+			creds:     spCreds,
+			observed:  map[string]interface{}{"q": "Resources | old"},
+			desired:   map[string]interface{}{"q": "Resources | new"},
+			resp:      arrayResp,
+			wantCalls: 1,
+			check: func(t *testing.T, _ *fnv1.RunFunctionResponse, m *callMock) {
+				if len(m.inputs) < 1 {
+					t.Fatalf("want a captured input, got %d", len(m.inputs))
+				}
+				if m.inputs[0].Query != "Resources | new" {
+					t.Errorf("want query %q, got %q", "Resources | new", m.inputs[0].Query)
+				}
+			},
+		},
+		"MaxResultsTrimsRows": {
+			reason:    "Rows above maxResults should be trimmed with a warning",
+			input:     `{` + fixInputHead + `,"maxResults":3}`,
+			creds:     spCreds,
+			resp:      rowsResp(5, nil),
+			wantCalls: 1,
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				if diff := cmp.Diff([]string{capWarn(3, 3)}, fixResultsBySeverity(rsp, fnv1.Severity_SEVERITY_WARNING)); diff != "" {
+					t.Errorf("warnings: -want +got:\n%s", diff)
+				}
+				want := []interface{}{map[string]interface{}{"name": "vm0"}, map[string]interface{}{"name": "vm1"}, map[string]interface{}{"name": "vm2"}}
+				if diff := cmp.Diff(want, fixDesiredStatus(rsp)["result"]); diff != "" {
+					t.Errorf("status target: -want +got:\n%s", diff)
+				}
+			},
+		},
+		"MoreRowsAvailableWarns": {
+			reason:    "A remaining SkipToken should warn when rows reach maxResults",
+			input:     `{` + fixInputHead + `,"maxResults":2}`,
+			creds:     spCreds,
+			resp:      rowsResp(2, to.Ptr("x")),
+			wantCalls: 1,
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				if diff := cmp.Diff([]string{capWarn(2, 2)}, fixResultsBySeverity(rsp, fnv1.Severity_SEVERITY_WARNING)); diff != "" {
+					t.Errorf("warnings: -want +got:\n%s", diff)
+				}
+				got, ok := fixDesiredStatus(rsp)["result"].([]interface{})
+				if !ok || len(got) != 2 {
+					t.Errorf("want 2 rows, got %v", fixDesiredStatus(rsp)["result"])
+				}
+			},
+		},
+		"DefaultMaxResultsWarns": {
+			reason:    "Without maxResults the default of 1000 rows should apply",
+			input:     `{` + fixInputHead + `}`,
+			creds:     spCreds,
+			resp:      rowsResp(1000, to.Ptr("x")),
+			wantCalls: 1,
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				if diff := cmp.Diff([]string{capWarn(1000, 1000)}, fixResultsBySeverity(rsp, fnv1.Severity_SEVERITY_WARNING)); diff != "" {
+					t.Errorf("warnings: -want +got:\n%s", diff)
+				}
+				got, ok := fixDesiredStatus(rsp)["result"].([]interface{})
+				if !ok || len(got) != 1000 {
+					t.Errorf("want 1000 rows, got %d", len(got))
+				}
+			},
+		},
+		"NormalSuccessNoWarning": {
+			reason:    "A complete result within maxResults should not warn",
+			input:     `{` + fixInputHead + `}`,
+			creds:     spCreds,
+			resp:      rowsResp(2, nil),
+			wantCalls: 1,
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				if w := fixResultsBySeverity(rsp, fnv1.Severity_SEVERITY_WARNING); len(w) != 0 {
+					t.Errorf("want no warnings, got %v", w)
+				}
+			},
+		},
+		"MaxResultsExactRowsNoWarning": {
+			reason:    "Exactly maxResults rows without a SkipToken should not warn",
+			input:     `{` + fixInputHead + `,"maxResults":2}`,
+			creds:     spCreds,
+			resp:      rowsResp(2, nil),
+			wantCalls: 1,
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				if w := fixResultsBySeverity(rsp, fnv1.Severity_SEVERITY_WARNING); len(w) != 0 {
+					t.Errorf("want no warnings, got %v", w)
+				}
+				want := []interface{}{map[string]interface{}{"name": "vm0"}, map[string]interface{}{"name": "vm1"}}
+				if diff := cmp.Diff(want, fixDesiredStatus(rsp)["result"]); diff != "" {
+					t.Errorf("status target: -want +got:\n%s", diff)
+				}
+			},
+		},
+		"MaxResultsNegativeRejected": {
+			reason: "A negative maxResults should be rejected before querying",
+			input:  `{` + fixInputHead + `,"maxResults":-1}`,
+			creds:  spCreds,
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				want := []string{"maxResults must be at least 1, got -1"}
+				if diff := cmp.Diff(want, fixResultsBySeverity(rsp, fnv1.Severity_SEVERITY_FATAL)); diff != "" {
+					t.Errorf("fatals: -want +got:\n%s", diff)
+				}
+			},
+		},
+		"MaxResultsZeroRejected": {
+			reason: "maxResults below 1 should be rejected before querying",
+			input:  `{` + fixInputHead + `,"maxResults":0}`,
+			creds:  spCreds,
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				want := []string{"maxResults must be at least 1, got 0"}
+				if diff := cmp.Diff(want, fixResultsBySeverity(rsp, fnv1.Severity_SEVERITY_FATAL)); diff != "" {
+					t.Errorf("fatals: -want +got:\n%s", diff)
+				}
+			},
+		},
+		"SubscriptionsRefUnresolvedWithStaticSubscriptions": {
+			reason:   "An unresolved subscriptionsRef should skip even when static subscriptions are set",
+			input:    `{` + fixInputHead + `,"subscriptions":["s"],"subscriptionsRef":"status.subs"}`,
+			creds:    spCreds,
+			observed: nil,
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				if diff := cmp.Diff([]string{unresolvedWarn("status.subs")}, fixResultsBySeverity(rsp, fnv1.Severity_SEVERITY_WARNING)); diff != "" {
+					t.Errorf("warnings: -want +got:\n%s", diff)
+				}
+			},
+		},
+		"SubscriptionsRefContextNotList": {
+			reason:  "A context ref resolving to a non-list should warn and skip the query",
+			input:   `{` + fixInputHead + `,"subscriptionsRef":"context.subs"}`,
+			creds:   spCreds,
+			context: map[string]interface{}{"subs": "s1"},
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				if diff := cmp.Diff([]string{unresolvedWarn("context.subs")}, fixResultsBySeverity(rsp, fnv1.Severity_SEVERITY_WARNING)); diff != "" {
+					t.Errorf("warnings: -want +got:\n%s", diff)
+				}
+			},
+		},
+		"SubscriptionsRefContextEmptyList": {
+			reason:  "A context ref resolving to an empty list should warn and skip the query",
+			input:   `{` + fixInputHead + `,"subscriptionsRef":"context.subs"}`,
+			creds:   spCreds,
+			context: map[string]interface{}{"subs": []interface{}{}},
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				if diff := cmp.Diff([]string{unresolvedWarn("context.subs")}, fixResultsBySeverity(rsp, fnv1.Severity_SEVERITY_WARNING)); diff != "" {
+					t.Errorf("warnings: -want +got:\n%s", diff)
+				}
+			},
+		},
+		"EmptyIdentityTypeAccepted": {
+			reason:    "An empty identity.type should use the default and not be fatal",
+			input:     `{` + fixInputHead + `,"identity":{"type":""}}`,
+			creds:     spCreds,
+			resp:      arrayResp,
+			wantCalls: 1,
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				if f := fixResultsBySeverity(rsp, fnv1.Severity_SEVERITY_FATAL); len(f) != 0 {
+					t.Errorf("want no fatals, got %v", f)
+				}
 			},
 		},
 	}
@@ -3497,6 +3670,11 @@ func TestMergeStatus(t *testing.T) {
 			observed: map[string]interface{}{"a": "s"},
 			desired:  map[string]interface{}{"a": map[string]interface{}{"x": 1}},
 			want:     map[string]interface{}{"a": map[string]interface{}{"x": 1}},
+		},
+		"DesiredScalarReplacesMap": {
+			observed: map[string]interface{}{"a": map[string]interface{}{"x": 1}},
+			desired:  map[string]interface{}{"a": "s"},
+			want:     map[string]interface{}{"a": "s"},
 		},
 	}
 	for name, tc := range cases {
@@ -3655,9 +3833,14 @@ func TestAzQuery(t *testing.T) {
 			page(to.Ptr("t1"), nil, row("a"), row("b")),
 			page(nil, nil, row("c")),
 		}}
-		got, err := newAQ(c).azQuery(context.Background(), spCreds, baseIn(), logging.NewNopLogger())
+		in := baseIn()
+		in.ManagementGroups = []*string{to.Ptr("mg1")}
+		got, err := newAQ(c).azQuery(context.Background(), spCreds, in, logging.NewNopLogger())
 		if err != nil {
 			t.Fatal(err)
+		}
+		if got.ResultTruncated == nil || *got.ResultTruncated != armresourcegraph.ResultTruncatedFalse {
+			t.Errorf("want ResultTruncatedFalse, got %v", got.ResultTruncated)
 		}
 		if diff := cmp.Diff([]interface{}{row("a"), row("b"), row("c")}, got.Data); diff != "" {
 			t.Errorf("data: -want +got:\n%s", diff)
@@ -3679,6 +3862,75 @@ func TestAzQuery(t *testing.T) {
 		}
 		if len(c.reqs[0].Subscriptions) == 0 || cmp.Diff(c.reqs[0].Subscriptions, c.reqs[1].Subscriptions) != "" {
 			t.Errorf("2nd call must repeat the subscriptions, got %v and %v", c.reqs[0].Subscriptions, c.reqs[1].Subscriptions)
+		}
+		if len(c.reqs[0].ManagementGroups) == 0 || cmp.Diff(c.reqs[0].ManagementGroups, c.reqs[1].ManagementGroups) != "" {
+			t.Errorf("2nd call must repeat the management groups, got %v and %v", c.reqs[0].ManagementGroups, c.reqs[1].ManagementGroups)
+		}
+	})
+
+	t.Run("MaxRowsStopsPaging", func(t *testing.T) {
+		pages := func() []armresourcegraph.ClientResourcesResponse {
+			return []armresourcegraph.ClientResourcesResponse{
+				page(to.Ptr("t1"), nil, row("a"), row("b")),
+				page(to.Ptr("t2"), nil, row("c"), row("d")),
+				page(nil, nil, row("e"), row("f")),
+			}
+		}
+		c := &fakeResourcesClient{pages: pages()}
+		in := baseIn()
+		in.MaxResults = to.Ptr(3)
+		got, err := newAQ(c).azQuery(context.Background(), spCreds, in, logging.NewNopLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(c.reqs) != 2 {
+			t.Errorf("want 2 calls, got %d", len(c.reqs))
+		}
+		if got.SkipToken == nil || *got.SkipToken != "t2" {
+			t.Errorf("want SkipToken t2, got %v", got.SkipToken)
+		}
+
+		c = &fakeResourcesClient{pages: pages()}
+		in.MaxResults = to.Ptr(100)
+		got, err = newAQ(c).azQuery(context.Background(), spCreds, in, logging.NewNopLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(c.reqs) != 3 {
+			t.Fatalf("want 3 calls, got %d", len(c.reqs))
+		}
+		for i, tok := range map[int]string{1: "t1", 2: "t2"} {
+			if c.reqs[i].Options == nil || c.reqs[i].Options.SkipToken == nil || *c.reqs[i].Options.SkipToken != tok {
+				t.Errorf("call %d must carry SkipToken %s, got %+v", i+1, tok, c.reqs[i].Options)
+			}
+		}
+		if rows, _ := got.Data.([]interface{}); len(rows) != 6 {
+			t.Errorf("want 6 rows, got %v", got.Data)
+		}
+		if got.SkipToken != nil {
+			t.Errorf("want nil SkipToken, got %v", *got.SkipToken)
+		}
+	})
+
+	t.Run("MaxRowsEqualsFirstPage", func(t *testing.T) {
+		c := &fakeResourcesClient{pages: []armresourcegraph.ClientResourcesResponse{
+			page(to.Ptr("t1"), nil, row("a"), row("b")),
+			page(nil, nil, row("c")),
+		}}
+		in := baseIn()
+		in.MaxResults = to.Ptr(2)
+		got, err := newAQ(c).azQuery(context.Background(), spCreds, in, logging.NewNopLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(c.reqs) != 1 {
+			t.Errorf("want 1 call, got %d", len(c.reqs))
+		}
+		if diff := cmp.Diff([]interface{}{row("a"), row("b")}, got.Data); diff != "" {
+			t.Errorf("data: -want +got:\n%s", diff)
+		}
+		if got.SkipToken == nil || *got.SkipToken != "t1" {
+			t.Errorf("want SkipToken t1, got %v", got.SkipToken)
 		}
 	})
 
