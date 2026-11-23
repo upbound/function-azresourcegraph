@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resourcegraph/armresourcegraph"
 	"github.com/google/go-cmp/cmp"
@@ -13,6 +19,7 @@ import (
 	"github.com/upbound/function-azresourcegraph/input/v1beta1"
 	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/crossplane/function-sdk-go/errors"
 	"github.com/crossplane/function-sdk-go/logging"
@@ -3161,4 +3168,635 @@ func validateBackwardsCompatibility(rsp *fnv1.RunFunctionResponse) error {
 	}
 
 	return nil
+}
+
+// callMock records calls and inputs of AzQuery and returns a scripted response.
+type callMock struct {
+	calls  int
+	inputs []*v1beta1.Input
+	resp   armresourcegraph.ClientResourcesResponse
+	err    error
+}
+
+func (m *callMock) azQuery(_ context.Context, _ interface{}, in *v1beta1.Input, _ logging.Logger) (armresourcegraph.ClientResourcesResponse, error) {
+	m.calls++
+	m.inputs = append(m.inputs, in)
+	return m.resp, m.err
+}
+
+const (
+	fixXR        = `{"apiVersion":"example.org/v1","kind":"XR","metadata":{"name":"cool-xr"}}`
+	fixSPCreds   = `{"clientId":"id","clientSecret":"secret","subscriptionId":"sub","tenantId":"tenant"}`
+	fixInputHead = `"apiVersion":"azresourcegraph.fn.crossplane.io/v1beta1","kind":"Input","query":"Resources| count","target":"status.result"`
+)
+
+func fixCredData(key, value string) map[string]*fnv1.Credentials {
+	return map[string]*fnv1.Credentials{
+		"azure-creds": {
+			Source: &fnv1.Credentials_CredentialData{CredentialData: &fnv1.CredentialData{
+				Data: map[string][]byte{key: []byte(value)},
+			}},
+		},
+	}
+}
+
+func fixXRWithStatus(t *testing.T, status map[string]interface{}) *fnv1.Resource {
+	t.Helper()
+	xr := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(fixXR), &xr); err != nil {
+		t.Fatal(err)
+	}
+	if status != nil {
+		xr["status"] = status
+	}
+	b, err := json.Marshal(xr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &fnv1.Resource{Resource: resource.MustStructJSON(string(b))}
+}
+
+func fixHasCondition(rsp *fnv1.RunFunctionResponse, typ, reason string) bool {
+	for _, c := range rsp.GetConditions() {
+		if c.GetType() == typ && c.GetReason() == reason {
+			return true
+		}
+	}
+	return false
+}
+
+func fixDesiredStatus(rsp *fnv1.RunFunctionResponse) map[string]interface{} {
+	return rsp.GetDesired().GetComposite().GetResource().GetFields()["status"].GetStructValue().AsMap()
+}
+
+func fixResultsBySeverity(rsp *fnv1.RunFunctionResponse, sev fnv1.Severity) []string {
+	var out []string
+	for _, r := range rsp.GetResults() {
+		if r.GetSeverity() == sev {
+			out = append(out, r.GetMessage())
+		}
+	}
+	return out
+}
+
+func TestRunFunctionFixes(t *testing.T) {
+	now := time.Now()
+	ts := func(d time.Duration) string { return now.Add(-d).Format(time.RFC3339) }
+	arrayResp := armresourcegraph.ClientResourcesResponse{
+		QueryResponse: armresourcegraph.QueryResponse{
+			Data: []interface{}{map[string]interface{}{"name": "vm1"}},
+		},
+	}
+	truncated := arrayResp
+	truncated.ResultTruncated = to.Ptr(armresourcegraph.ResultTruncatedTrue)
+
+	type tc struct {
+		reason    string
+		input     string
+		creds     map[string]*fnv1.Credentials
+		observed  map[string]interface{}
+		desired   map[string]interface{}
+		context   map[string]interface{}
+		resp      armresourcegraph.ClientResourcesResponse
+		wantCalls int
+		check     func(t *testing.T, rsp *fnv1.RunFunctionResponse, m *callMock)
+	}
+	spCreds := fixCredData("credentials", fixSPCreds)
+	unresolvedWarn := func(ref string) string {
+		return fmt.Sprintf("subscriptionsRef %q did not resolve to a non-empty list of subscription IDs, skipping query", ref)
+	}
+	unresolved := func(ref string, status map[string]interface{}) tc {
+		return tc{
+			reason:   "An unresolved subscriptionsRef should warn and skip the query",
+			input:    `{` + fixInputHead + `,"subscriptionsRef":"` + ref + `"}`,
+			creds:    spCreds,
+			observed: status,
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				if diff := cmp.Diff([]string{unresolvedWarn(ref)}, fixResultsBySeverity(rsp, fnv1.Severity_SEVERITY_WARNING)); diff != "" {
+					t.Errorf("warnings: -want +got:\n%s", diff)
+				}
+			},
+		}
+	}
+
+	cases := map[string]tc{
+		"UnknownIdentityType": {
+			reason: "An unknown identity.type should be rejected before querying",
+			input:  `{` + fixInputHead + `,"identity":{"type":"AzureWorkloadIdentity"}}`,
+			creds:  spCreds,
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				want := []string{`unsupported identity.type "AzureWorkloadIdentity": must be AzureServicePrincipalCredentials or AzureWorkloadIdentityCredentials`}
+				if diff := cmp.Diff(want, fixResultsBySeverity(rsp, fnv1.Severity_SEVERITY_FATAL)); diff != "" {
+					t.Errorf("fatals: -want +got:\n%s", diff)
+				}
+				if len(rsp.GetResults()) != 1 {
+					t.Errorf("want exactly one result, got %d", len(rsp.GetResults()))
+				}
+			},
+		},
+		"SecretWithoutCredentialsKey": {
+			reason: "A secret without the credentials key should be rejected",
+			input:  `{` + fixInputHead + `}`,
+			creds:  fixCredData("creds", fixSPCreds),
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				want := []string{`azure-creds credential has no "credentials" key`}
+				if diff := cmp.Diff(want, fixResultsBySeverity(rsp, fnv1.Severity_SEVERITY_FATAL)); diff != "" {
+					t.Errorf("fatals: -want +got:\n%s", diff)
+				}
+			},
+		},
+		"IntervalBehindStatusWritingStep": {
+			reason:   "Interval should apply when an earlier step wrote other status fields",
+			input:    `{` + fixInputHead + `,"queryIntervalMinutes":60}`,
+			creds:    spCreds,
+			observed: map[string]interface{}{"result": []interface{}{map[string]interface{}{"name": "x"}, map[string]interface{}{"lastQueryTime": ts(time.Minute)}}},
+			desired:  map[string]interface{}{"marker": "m"},
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				if !fixHasCondition(rsp, "FunctionSkip", "IntervalLimit") {
+					t.Errorf("want FunctionSkip/IntervalLimit, got %v", rsp.GetConditions())
+				}
+				st := fixDesiredStatus(rsp)
+				if st["marker"] != "m" {
+					t.Errorf("desired status lost marker: %v", st)
+				}
+				if got, ok := st["result"].([]interface{}); !ok || len(got) != 2 {
+					t.Errorf("desired status lost target: %v", st)
+				}
+			},
+		},
+		"SkipWhenTargetHasDataBehindStatusWritingStep": {
+			reason:   "skipQueryWhenTargetHasData should apply when an earlier step wrote other status fields",
+			input:    `{` + fixInputHead + `,"skipQueryWhenTargetHasData":true}`,
+			creds:    spCreds,
+			observed: map[string]interface{}{"result": []interface{}{map[string]interface{}{"name": "x"}}},
+			desired:  map[string]interface{}{"marker": "m"},
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				if !fixHasCondition(rsp, "FunctionSkip", "SkippedQuery") {
+					t.Errorf("want FunctionSkip/SkippedQuery, got %v", rsp.GetConditions())
+				}
+			},
+		},
+		"EmptyFirstResultRequeriesAfterInterval": {
+			reason:    "A lastQueryTime-only target has no data, so an elapsed interval should re-query",
+			input:     `{` + fixInputHead + `,"queryIntervalMinutes":1,"skipQueryWhenTargetHasData":true}`,
+			creds:     spCreds,
+			observed:  map[string]interface{}{"result": []interface{}{map[string]interface{}{"lastQueryTime": ts(5 * time.Minute)}}},
+			resp:      arrayResp,
+			wantCalls: 1,
+		},
+		"ArrayResultNoPreviousData": {
+			reason:    "Array results should get a trailing lastQueryTime element",
+			input:     `{` + fixInputHead + `,"queryIntervalMinutes":10}`,
+			creds:     spCreds,
+			resp:      arrayResp,
+			wantCalls: 1,
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				got, ok := fixDesiredStatus(rsp)["result"].([]interface{})
+				if !ok || len(got) != 2 {
+					t.Fatalf("want 2 elements, got %v", fixDesiredStatus(rsp))
+				}
+				last, _ := got[1].(map[string]interface{})
+				parsed, err := time.Parse(time.RFC3339, fmt.Sprint(last["lastQueryTime"]))
+				if len(last) != 1 || err != nil || time.Since(parsed) > time.Minute {
+					t.Errorf("bad lastQueryTime element: %v", got[1])
+				}
+			},
+		},
+		"ArrayResultIntervalElapsed": {
+			reason:    "An elapsed interval on array results should re-query",
+			input:     `{` + fixInputHead + `,"queryIntervalMinutes":10}`,
+			creds:     spCreds,
+			observed:  map[string]interface{}{"result": []interface{}{map[string]interface{}{"name": "vm1"}, map[string]interface{}{"lastQueryTime": ts(15 * time.Minute)}}},
+			resp:      arrayResp,
+			wantCalls: 1,
+		},
+		"ArrayResultIntervalNotElapsed": {
+			reason:   "A running interval on array results should skip",
+			input:    `{` + fixInputHead + `,"queryIntervalMinutes":10}`,
+			creds:    spCreds,
+			observed: map[string]interface{}{"result": []interface{}{map[string]interface{}{"name": "vm1"}, map[string]interface{}{"lastQueryTime": ts(5 * time.Minute)}}},
+			resp:     arrayResp,
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				if !fixHasCondition(rsp, "FunctionSkip", "IntervalLimit") {
+					t.Errorf("want FunctionSkip/IntervalLimit, got %v", rsp.GetConditions())
+				}
+			},
+		},
+		"SubscriptionsRefStatus": {
+			reason:    "subscriptionsRef from status should resolve",
+			input:     `{` + fixInputHead + `,"subscriptionsRef":"status.subs"}`,
+			creds:     spCreds,
+			observed:  map[string]interface{}{"subs": []interface{}{"s1", "s2"}},
+			resp:      arrayResp,
+			wantCalls: 1,
+			check: func(t *testing.T, _ *fnv1.RunFunctionResponse, m *callMock) {
+				if len(m.inputs) < 1 {
+					t.Fatalf("want a captured input, got %d", len(m.inputs))
+				}
+				if diff := cmp.Diff([]*string{to.Ptr("s1"), to.Ptr("s2")}, m.inputs[0].Subscriptions); diff != "" {
+					t.Errorf("subscriptions: -want +got:\n%s", diff)
+				}
+			},
+		},
+		"SubscriptionsRefContextBracketPath": {
+			reason:    "subscriptionsRef from context with a bracket path should resolve",
+			input:     `{` + fixInputHead + `,"subscriptionsRef":"context.[apiextensions.crossplane.io/environment].subscriptions"}`,
+			creds:     spCreds,
+			context:   map[string]interface{}{"apiextensions.crossplane.io/environment": map[string]interface{}{"subscriptions": []interface{}{"s1", "s2"}}},
+			resp:      arrayResp,
+			wantCalls: 1,
+			check: func(t *testing.T, _ *fnv1.RunFunctionResponse, m *callMock) {
+				if len(m.inputs) < 1 {
+					t.Fatalf("want a captured input, got %d", len(m.inputs))
+				}
+				if diff := cmp.Diff([]*string{to.Ptr("s1"), to.Ptr("s2")}, m.inputs[0].Subscriptions); diff != "" {
+					t.Errorf("subscriptions: -want +got:\n%s", diff)
+				}
+			},
+		},
+		"SubscriptionsRefStatusMissing":         unresolved("status.subs", nil),
+		"SubscriptionsRefStatusNotList":         unresolved("status.subs", map[string]interface{}{"subs": "s1"}),
+		"SubscriptionsRefStatusEmptyList":       unresolved("status.subs", map[string]interface{}{"subs": []interface{}{}}),
+		"SubscriptionsRefStatusNonStringItems":  unresolved("status.subs", map[string]interface{}{"subs": []interface{}{"s1", 2}}),
+		"SubscriptionsRefStatusEmptyStringItem": unresolved("status.subs", map[string]interface{}{"subs": []interface{}{"s1", ""}}),
+		"SubscriptionsRefContextMissing":        unresolved("context.subs", nil),
+		"TruncatedResultWarns": {
+			reason:    "Truncated results should produce a warning",
+			input:     `{` + fixInputHead + `}`,
+			creds:     spCreds,
+			resp:      truncated,
+			wantCalls: 1,
+			check: func(t *testing.T, rsp *fnv1.RunFunctionResponse, _ *callMock) {
+				want := []string{"Azure Resource Graph returned truncated results and not all rows were written; paging is not possible when the query uses limit, take or sample, or when all output columns are dynamic or null"}
+				if diff := cmp.Diff(want, fixResultsBySeverity(rsp, fnv1.Severity_SEVERITY_WARNING)); diff != "" {
+					t.Errorf("warnings: -want +got:\n%s", diff)
+				}
+				if !fixHasCondition(rsp, "FunctionSuccess", "Success") {
+					t.Errorf("want FunctionSuccess, got %v", rsp.GetConditions())
+				}
+			},
+		},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			req := &fnv1.RunFunctionRequest{
+				Meta:        &fnv1.RequestMeta{Tag: "hello"},
+				Input:       resource.MustStructJSON(c.input),
+				Observed:    &fnv1.State{Composite: fixXRWithStatus(t, c.observed)},
+				Credentials: c.creds,
+			}
+			if c.desired != nil {
+				req.Desired = &fnv1.State{Composite: fixXRWithStatus(t, c.desired)}
+			}
+			if c.context != nil {
+				ctxStruct, err := structpb.NewStruct(c.context)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req.Context = ctxStruct
+			}
+			m := &callMock{resp: c.resp}
+			f := &Function{azureQuery: m, log: logging.NewNopLogger()}
+			rsp, err := f.RunFunction(context.Background(), req)
+			if err != nil {
+				t.Fatalf("%s\nRunFunction returned error: %v", c.reason, err)
+			}
+			if m.calls != c.wantCalls {
+				t.Errorf("%s\nwant %d azQuery calls, got %d", c.reason, c.wantCalls, m.calls)
+			}
+			if c.check != nil {
+				c.check(t, rsp, m)
+			}
+		})
+	}
+}
+
+func TestMergeStatus(t *testing.T) {
+	cases := map[string]struct {
+		observed map[string]interface{}
+		desired  map[string]interface{}
+		want     map[string]interface{}
+	}{
+		"NestedMapsMerged": {
+			observed: map[string]interface{}{"a": map[string]interface{}{"x": 1, "y": 2}},
+			desired:  map[string]interface{}{"a": map[string]interface{}{"y": 3, "z": 4}},
+			want:     map[string]interface{}{"a": map[string]interface{}{"x": 1, "y": 3, "z": 4}},
+		},
+		"DesiredWinsOnScalar": {
+			observed: map[string]interface{}{"a": "old", "b": 1},
+			desired:  map[string]interface{}{"a": "new"},
+			want:     map[string]interface{}{"a": "new", "b": 1},
+		},
+		"ListsReplaced": {
+			observed: map[string]interface{}{"a": []interface{}{1, 2, 3}},
+			desired:  map[string]interface{}{"a": []interface{}{4}},
+			want:     map[string]interface{}{"a": []interface{}{4}},
+		},
+		"DesiredMapReplacesScalar": {
+			observed: map[string]interface{}{"a": "s"},
+			desired:  map[string]interface{}{"a": map[string]interface{}{"x": 1}},
+			want:     map[string]interface{}{"a": map[string]interface{}{"x": 1}},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			obsBefore, _ := json.Marshal(tc.observed)
+			desBefore, _ := json.Marshal(tc.desired)
+			got := mergeStatus(tc.observed, tc.desired)
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("mergeStatus(...): -want +got:\n%s", diff)
+			}
+			obsAfter, _ := json.Marshal(tc.observed)
+			desAfter, _ := json.Marshal(tc.desired)
+			if !bytes.Equal(obsBefore, obsAfter) || !bytes.Equal(desBefore, desAfter) {
+				t.Errorf("mergeStatus mutated its inputs")
+			}
+		})
+	}
+}
+
+func TestTargetHasData(t *testing.T) {
+	lq := map[string]interface{}{"lastQueryTime": "2024-01-01T12:00:00Z"}
+	cases := map[string]struct {
+		data map[string]interface{}
+		want bool
+	}{
+		"ArrayLastQueryTimeOnly": {data: map[string]interface{}{"k": []interface{}{lq}}, want: false},
+		"ArrayDataAndLastQueryTime": {data: map[string]interface{}{"k": []interface{}{
+			map[string]interface{}{"name": "x"}, lq,
+		}}, want: true},
+		"MapLastQueryTimeOnly":    {data: map[string]interface{}{"k": lq}, want: false},
+		"MapDataAndLastQueryTime": {data: map[string]interface{}{"k": map[string]interface{}{"a": 1, "lastQueryTime": "t"}}, want: true},
+		"EmptyArray":              {data: map[string]interface{}{"k": []interface{}{}}, want: false},
+		"MissingKey":              {data: map[string]interface{}{}, want: false},
+		"NonEmptyString":          {data: map[string]interface{}{"k": "v"}, want: true},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := targetHasData(tc.data, "k")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tc.want {
+				t.Errorf("targetHasData() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// fakeResourcesClient records requests and returns scripted pages.
+type fakeResourcesClient struct {
+	pages []armresourcegraph.ClientResourcesResponse
+	err   error
+	// errOnCall fails only that 1-based call; 0 means never.
+	errOnCall int
+	reqs      []armresourcegraph.QueryRequest
+}
+
+func (c *fakeResourcesClient) Resources(_ context.Context, q armresourcegraph.QueryRequest, _ *armresourcegraph.ClientResourcesOptions) (armresourcegraph.ClientResourcesResponse, error) {
+	i := len(c.reqs)
+	opts := q.Options
+	if opts != nil {
+		cp := *opts
+		q.Options = &cp
+	}
+	c.reqs = append(c.reqs, q)
+	if len(c.reqs) > len(c.pages)+2 {
+		return armresourcegraph.ClientResourcesResponse{}, errors.New("fake: too many calls")
+	}
+	if c.err != nil {
+		return armresourcegraph.ClientResourcesResponse{}, c.err
+	}
+	if c.errOnCall == len(c.reqs) {
+		return armresourcegraph.ClientResourcesResponse{}, errors.New("boom")
+	}
+	if i >= len(c.pages) {
+		i = len(c.pages) - 1
+	}
+	return c.pages[i], nil
+}
+
+func page(token *string, trunc *armresourcegraph.ResultTruncated, rows ...interface{}) armresourcegraph.ClientResourcesResponse {
+	return armresourcegraph.ClientResourcesResponse{QueryResponse: armresourcegraph.QueryResponse{
+		Data:            rows,
+		Count:           to.Ptr(int64(len(rows))),
+		SkipToken:       token,
+		ResultTruncated: trunc,
+	}}
+}
+
+func TestAzQuery(t *testing.T) {
+	spCreds := map[string]string{TenantID: "tenant", ClientID: "id", ClientSecret: "secret", SubscriptionID: "cred-sub"}
+	baseIn := func() *v1beta1.Input { return &v1beta1.Input{Query: "Resources", Target: "status.r"} }
+	row := func(n string) interface{} { return map[string]interface{}{"name": n} }
+
+	newAQ := func(c *fakeResourcesClient) *AzureQuery {
+		return &AzureQuery{newClient: func(azcore.TokenCredential) (resourcesClient, error) { return c, nil }}
+	}
+
+	t.Run("UnsupportedIdentity", func(t *testing.T) {
+		c := &fakeResourcesClient{}
+		in := baseIn()
+		in.Identity = &v1beta1.Identity{Type: "Bogus"}
+		_, err := newAQ(c).azQuery(context.Background(), spCreds, in, logging.NewNopLogger())
+		if err == nil || !strings.Contains(err.Error(), "unsupported identity.type") {
+			t.Errorf("want unsupported identity.type error, got %v", err)
+		}
+		if len(c.reqs) != 0 {
+			t.Errorf("client must not be called, got %d calls", len(c.reqs))
+		}
+	})
+
+	t.Run("WorkloadIdentityMultipleEntries", func(t *testing.T) {
+		c := &fakeResourcesClient{}
+		in := baseIn()
+		in.Identity = &v1beta1.Identity{Type: v1beta1.IdentityTypeAzureWorkloadIdentityCredentials}
+		_, err := newAQ(c).azQuery(context.Background(), []map[string]string{{}, {}}, in, logging.NewNopLogger())
+		if err == nil || err.Error() != "invalid credential format: workload identity support only one credentials entry" {
+			t.Errorf("unexpected error: %v", err)
+		}
+		if len(c.reqs) != 0 {
+			t.Errorf("client must not be called, got %d calls", len(c.reqs))
+		}
+	})
+
+	t.Run("SingleServicePrincipalSubscription", func(t *testing.T) {
+		c := &fakeResourcesClient{pages: []armresourcegraph.ClientResourcesResponse{page(nil, nil, row("a"))}}
+		_, err := newAQ(c).azQuery(context.Background(), spCreds, baseIn(), logging.NewNopLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(c.reqs) != 1 {
+			t.Fatalf("want 1 call, got %d", len(c.reqs))
+		}
+		if diff := cmp.Diff([]*string{to.Ptr("cred-sub")}, c.reqs[0].Subscriptions); diff != "" {
+			t.Errorf("subscriptions: -want +got:\n%s", diff)
+		}
+	})
+
+	t.Run("InputSubscriptionsOverrideCredentials", func(t *testing.T) {
+		c := &fakeResourcesClient{pages: []armresourcegraph.ClientResourcesResponse{page(nil, nil, row("a"))}}
+		in := baseIn()
+		in.Subscriptions = []*string{to.Ptr("in-sub")}
+		if _, err := newAQ(c).azQuery(context.Background(), spCreds, in, logging.NewNopLogger()); err != nil {
+			t.Fatal(err)
+		}
+		if len(c.reqs) < 1 {
+			t.Fatalf("want at least 1 call, got %d", len(c.reqs))
+		}
+		if diff := cmp.Diff([]*string{to.Ptr("in-sub")}, c.reqs[0].Subscriptions); diff != "" {
+			t.Errorf("subscriptions: -want +got:\n%s", diff)
+		}
+	})
+
+	t.Run("TwoPages", func(t *testing.T) {
+		c := &fakeResourcesClient{pages: []armresourcegraph.ClientResourcesResponse{
+			page(to.Ptr("t1"), nil, row("a"), row("b")),
+			page(nil, nil, row("c")),
+		}}
+		got, err := newAQ(c).azQuery(context.Background(), spCreds, baseIn(), logging.NewNopLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff([]interface{}{row("a"), row("b"), row("c")}, got.Data); diff != "" {
+			t.Errorf("data: -want +got:\n%s", diff)
+		}
+		if got.Count == nil || *got.Count != 3 {
+			t.Errorf("want count 3, got %v", got.Count)
+		}
+		if got.SkipToken != nil {
+			t.Errorf("want nil SkipToken, got %v", *got.SkipToken)
+		}
+		if len(c.reqs) != 2 {
+			t.Fatalf("want 2 calls, got %d", len(c.reqs))
+		}
+		if c.reqs[1].Options == nil || c.reqs[1].Options.SkipToken == nil || *c.reqs[1].Options.SkipToken != "t1" {
+			t.Errorf("2nd call must carry SkipToken t1, got %+v", c.reqs[1].Options)
+		}
+		if c.reqs[0].Query == nil || *c.reqs[0].Query == "" || c.reqs[1].Query == nil || *c.reqs[0].Query != *c.reqs[1].Query {
+			t.Errorf("2nd call must repeat the query, got %v and %v", c.reqs[0].Query, c.reqs[1].Query)
+		}
+		if len(c.reqs[0].Subscriptions) == 0 || cmp.Diff(c.reqs[0].Subscriptions, c.reqs[1].Subscriptions) != "" {
+			t.Errorf("2nd call must repeat the subscriptions, got %v and %v", c.reqs[0].Subscriptions, c.reqs[1].Subscriptions)
+		}
+	})
+
+	t.Run("RepeatedSkipToken", func(t *testing.T) {
+		c := &fakeResourcesClient{pages: []armresourcegraph.ClientResourcesResponse{
+			page(to.Ptr("t1"), nil, row("a")),
+			page(to.Ptr("t1"), nil, row("b")),
+		}}
+		got, err := newAQ(c).azQuery(context.Background(), spCreds, baseIn(), logging.NewNopLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(c.reqs) != 2 {
+			t.Errorf("want 2 calls, got %d", len(c.reqs))
+		}
+		if got.ResultTruncated == nil || *got.ResultTruncated != armresourcegraph.ResultTruncatedTrue {
+			t.Errorf("want ResultTruncatedTrue, got %v", got.ResultTruncated)
+		}
+	})
+
+	t.Run("NonArrayLaterPage", func(t *testing.T) {
+		later := armresourcegraph.ClientResourcesResponse{QueryResponse: armresourcegraph.QueryResponse{Data: map[string]interface{}{"x": 1}}}
+		c := &fakeResourcesClient{pages: []armresourcegraph.ClientResourcesResponse{page(to.Ptr("t1"), nil, row("a")), later}}
+		got, err := newAQ(c).azQuery(context.Background(), spCreds, baseIn(), logging.NewNopLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(c.reqs) != 2 {
+			t.Errorf("want 2 calls, got %d", len(c.reqs))
+		}
+		if diff := cmp.Diff([]interface{}{row("a")}, got.Data); diff != "" {
+			t.Errorf("data: -want +got:\n%s", diff)
+		}
+		if got.ResultTruncated == nil || *got.ResultTruncated != armresourcegraph.ResultTruncatedTrue {
+			t.Errorf("want ResultTruncatedTrue, got %v", got.ResultTruncated)
+		}
+	})
+
+	t.Run("TruncatedFirstPageNoToken", func(t *testing.T) {
+		c := &fakeResourcesClient{pages: []armresourcegraph.ClientResourcesResponse{page(nil, to.Ptr(armresourcegraph.ResultTruncatedTrue), row("a"))}}
+		got, err := newAQ(c).azQuery(context.Background(), spCreds, baseIn(), logging.NewNopLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(c.reqs) != 1 {
+			t.Errorf("want 1 call, got %d", len(c.reqs))
+		}
+		if diff := cmp.Diff([]interface{}{row("a")}, got.Data); diff != "" {
+			t.Errorf("data: -want +got:\n%s", diff)
+		}
+		if got.ResultTruncated == nil || *got.ResultTruncated != armresourcegraph.ResultTruncatedTrue {
+			t.Errorf("want ResultTruncatedTrue, got %v", got.ResultTruncated)
+		}
+	})
+
+	t.Run("SecondPageError", func(t *testing.T) {
+		c := &fakeResourcesClient{pages: []armresourcegraph.ClientResourcesResponse{page(to.Ptr("t1"), nil, row("a"))}, errOnCall: 2}
+		_, err := newAQ(c).azQuery(context.Background(), spCreds, baseIn(), logging.NewNopLogger())
+		if err == nil || !strings.Contains(err.Error(), "failed to finish the request") {
+			t.Errorf("want failed to finish the request, got %v", err)
+		}
+		if len(c.reqs) != 2 {
+			t.Errorf("want 2 calls, got %d", len(c.reqs))
+		}
+	})
+
+	t.Run("TruncatedAggregated", func(t *testing.T) {
+		c := &fakeResourcesClient{pages: []armresourcegraph.ClientResourcesResponse{
+			page(to.Ptr("t1"), to.Ptr(armresourcegraph.ResultTruncatedFalse), row("a")),
+			page(nil, to.Ptr(armresourcegraph.ResultTruncatedTrue), row("b")),
+		}}
+		got, err := newAQ(c).azQuery(context.Background(), spCreds, baseIn(), logging.NewNopLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ResultTruncated == nil || *got.ResultTruncated != armresourcegraph.ResultTruncatedTrue {
+			t.Errorf("want ResultTruncatedTrue, got %v", got.ResultTruncated)
+		}
+	})
+
+	t.Run("MapDataUnchanged", func(t *testing.T) {
+		mapData := map[string]interface{}{"count": 5}
+		resp := armresourcegraph.ClientResourcesResponse{QueryResponse: armresourcegraph.QueryResponse{Data: mapData, SkipToken: to.Ptr("t1")}}
+		c := &fakeResourcesClient{pages: []armresourcegraph.ClientResourcesResponse{resp}}
+		got, err := newAQ(c).azQuery(context.Background(), spCreds, baseIn(), logging.NewNopLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if diff := cmp.Diff(mapData, got.Data); diff != "" {
+			t.Errorf("data: -want +got:\n%s", diff)
+		}
+		if len(c.reqs) != 1 {
+			t.Errorf("want 1 call, got %d", len(c.reqs))
+		}
+	})
+
+	t.Run("ClientError", func(t *testing.T) {
+		c := &fakeResourcesClient{err: errors.New("boom")}
+		_, err := newAQ(c).azQuery(context.Background(), spCreds, baseIn(), logging.NewNopLogger())
+		if err == nil || !strings.Contains(err.Error(), "failed to finish the request") {
+			t.Errorf("want failed to finish the request, got %v", err)
+		}
+	})
+
+	t.Run("WorkloadIdentitySingleEntry", func(t *testing.T) {
+		tokenFile := filepath.Join(t.TempDir(), "token")
+		if err := os.WriteFile(tokenFile, []byte("token"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		c := &fakeResourcesClient{pages: []armresourcegraph.ClientResourcesResponse{page(nil, nil, row("a"))}}
+		in := baseIn()
+		in.Identity = &v1beta1.Identity{Type: v1beta1.IdentityTypeAzureWorkloadIdentityCredentials}
+		creds := map[string]string{WorkloadIdentityCredentialPath: tokenFile, TenantID: "tenant", ClientID: "id"}
+		if _, err := newAQ(c).azQuery(context.Background(), creds, in, logging.NewNopLogger()); err != nil {
+			t.Fatal(err)
+		}
+		if len(c.reqs) != 1 {
+			t.Errorf("want 1 call, got %d", len(c.reqs))
+		}
+	})
 }

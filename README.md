@@ -27,8 +27,9 @@ Example pipeline step:
           name: azure-account-creds
 ```
 
-The Azure Credentials Secret structure is fully compatible with the standard
-[Azure Official Provider][azop]
+The function reads the credential named `azure-creds`. The Secret must hold the
+credentials JSON (same JSON as the [Azure Official Provider][azop]) under the key
+`credentials`. A Secret using another key (e.g. `creds`) is rejected with a fatal result.
 
 Example XR status after e2e query:
 
@@ -48,6 +49,8 @@ status:
     name: us-vm-lzbpt-fgcds
     type: microsoft.compute/virtualmachines
 ```
+
+Results are paged automatically. If Azure Resource Graph reports truncated results that cannot be paged (the query uses limit, take or sample, or all output columns are dynamic or null), the function writes the rows it received and emits a warning. Results are written to the target as-is, so keep them within Kubernetes object size limits, for example by projecting only the columns you need.
 
 ### QueryRef
 
@@ -150,6 +153,9 @@ subscriptionsRef: status.subscriptions
 subscriptionsRef: "context.[apiextensions.crossplane.io/environment].subscriptions"
 ```
 
+If `subscriptionsRef` does not resolve to a non-empty list of subscription IDs, the function emits a warning
+and skips the query instead of falling back to the `subscriptions` field, the credentials or the tenant scope.
+
 ## Round-robin Service Principal Authentication
 
 To further mitigate Azure ARM throttling, you can now use multiple service principals with automatic round-robin selection. This distributes load across multiple identities and reduces the likelihood of hitting rate limits.
@@ -222,12 +228,16 @@ type: Opaque
 stringData:
   credentials: |
     {
-      "clientId": "your-client-id", # optional, defaults to AZURE_CLIENT_ID injected by Azure Workload Identity
-      "tenantId": "your-tenant-id", # optional, defaults to AZURE_TENANT_ID injected by Azure Workload Identity
-      "subscriptionId": "your-subscription-id" # optional, if both subscriptionId and Explicit Subscriptions scope is not defined defaults to tenant-scope search
+      "clientId": "your-client-id",
+      "tenantId": "your-tenant-id",
+      "subscriptionId": "your-subscription-id",
       "federatedTokenFile": "/var/run/secrets/azure/tokens/azure-identity-token"
     }
 ```
+
+* `clientId` is optional, defaults to `AZURE_CLIENT_ID` injected by Azure Workload Identity.
+* `tenantId` is optional, defaults to `AZURE_TENANT_ID` injected by Azure Workload Identity.
+* `subscriptionId` is optional, if both `subscriptionId` and Explicit Subscriptions scope are not defined it defaults to tenant-scope search.
 
 #### Function
 ```yaml
@@ -236,7 +246,7 @@ kind: Function
 metadata:
   name: upbound-function-azresourcegraph
 spec:
-  package: xpkg.upbound.io/upbound/function-azresourcegraph:v0.10.0
+  package: xpkg.upbound.io/upbound/function-azresourcegraph:v0.12.1
   runtimeConfigRef:
     apiVersion: pkg.crossplane.io/v1beta1
     kind: DeploymentRuntimeConfig
@@ -285,6 +295,8 @@ spec:
 ```
 
 ## Using Different Credentials
+
+Any other `identity.type` value is rejected with a fatal result.
 
 ### Using ServicePrincipal credentials
 

@@ -78,4 +78,5 @@ const (
 
 // IdentityType controls type of credentials to use for authentication to the Microsoft Graph API.
 // Supported values: AzureServicePrincipalCredentials;AzureWorkloadIdentityCredentials
+// +kubebuilder:validation:Enum=AzureServicePrincipalCredentials;AzureWorkloadIdentityCredentials
 type IdentityType string

@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/to"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/resourcemanager/resourcegraph/armresourcegraph"
@@ -137,6 +138,11 @@ func (f *Function) parseInputAndCredentials(req *fnv1.RunFunctionRequest, rsp *f
 		return nil, nil, err
 	}
 
+	if err := validateIdentity(in); err != nil {
+		response.Fatal(rsp, err)
+		return nil, nil, err
+	}
+
 	azureCreds, err := getCreds(req)
 	if err != nil {
 		response.Fatal(rsp, err)
@@ -150,7 +156,9 @@ func (f *Function) parseInputAndCredentials(req *fnv1.RunFunctionRequest, rsp *f
 	case []map[string]string:
 		f.log.Info("Multiple service principals mode detected", "servicePrincipalCount", len(v))
 	default:
-		return nil, nil, errors.New("invalid credential format")
+		err := errors.New("invalid credential format")
+		response.Fatal(rsp, err)
+		return nil, nil, err
 	}
 
 	if f.azureQuery == nil {
@@ -158,6 +166,19 @@ func (f *Function) parseInputAndCredentials(req *fnv1.RunFunctionRequest, rsp *f
 	}
 
 	return in, azureCreds, nil
+}
+
+// validateIdentity rejects unsupported identity types.
+func validateIdentity(in *v1beta1.Input) error {
+	if in.Identity == nil || in.Identity.Type == "" {
+		return nil
+	}
+	switch in.Identity.Type {
+	case v1beta1.IdentityTypeAzureServicePrincipalCredentials, v1beta1.IdentityTypeAzureWorkloadIdentityCredentials:
+		return nil
+	default:
+		return errors.Errorf("unsupported identity.type %q: must be %s or %s", in.Identity.Type, v1beta1.IdentityTypeAzureServicePrincipalCredentials, v1beta1.IdentityTypeAzureWorkloadIdentityCredentials)
+	}
 }
 
 // resolveQuery resolves the query from a reference if specified.
@@ -188,31 +209,53 @@ func (f *Function) resolveSubscriptions(req *fnv1.RunFunctionRequest, in *v1beta
 		return nil
 	}
 
+	var resolved bool
 	switch {
 	case strings.HasPrefix(*in.SubscriptionsRef, "status."):
-		if err := f.getSubscriptionsFromStatus(req, in); err != nil {
+		ok, err := f.getSubscriptionsFromStatus(req, in)
+		if err != nil {
 			response.Fatal(rsp, err)
 			return err
 		}
+		resolved = ok
 	case strings.HasPrefix(*in.SubscriptionsRef, "context."):
 		functionContext := req.GetContext().AsMap()
-		paved := fieldpath.Pave(functionContext)
-		value, err := paved.GetValue(strings.TrimPrefix(*in.SubscriptionsRef, "context."))
-		if err == nil && value != nil {
-			if arr, ok := value.([]interface{}); ok {
-				in.Subscriptions = make([]*string, len(arr))
-				for i, sub := range arr {
-					if strSub, ok := sub.(string); ok {
-						in.Subscriptions[i] = to.Ptr(strSub)
-					}
-				}
+		value, err := fieldpath.Pave(functionContext).GetValue(strings.TrimPrefix(*in.SubscriptionsRef, "context."))
+		if err == nil {
+			if subs, ok := toSubscriptionIDs(value); ok {
+				in.Subscriptions = subs
+				resolved = true
 			}
 		}
 	default:
 		response.Fatal(rsp, errors.Errorf("Unrecognized SubscriptionsRef field: %s", *in.SubscriptionsRef))
 		return errors.New("unrecognized SubscriptionsRef field")
 	}
+
+	if !resolved {
+		err := errors.Errorf("subscriptionsRef %q did not resolve to a non-empty list of subscription IDs, skipping query", *in.SubscriptionsRef)
+		f.log.Info("WARNING: ", "subscriptionsRef unresolved", *in.SubscriptionsRef)
+		response.Warning(rsp, err)
+		return err
+	}
 	return nil
+}
+
+// toSubscriptionIDs converts a non-empty list of non-empty strings to subscription IDs.
+func toSubscriptionIDs(value interface{}) ([]*string, bool) {
+	arr, ok := value.([]interface{})
+	if !ok || len(arr) == 0 {
+		return nil, false
+	}
+	subs := make([]*string, len(arr))
+	for i, sub := range arr {
+		str, ok := sub.(string)
+		if !ok || str == "" {
+			return nil, false
+		}
+		subs[i] = to.Ptr(str)
+	}
+	return subs, true
 }
 
 // getXRAndStatus retrieves status and desired XR, handling initialization if needed
@@ -228,8 +271,6 @@ func (f *Function) getXRAndStatus(req *fnv1.RunFunctionRequest) (map[string]inte
 		return nil, nil, errors.Wrap(err, "cannot get desired composite resource")
 	}
 
-	xrStatus := make(map[string]interface{})
-
 	// Initialize dxr from oxr if needed
 	if dxr.Resource.GetKind() == "" {
 		dxr.Resource.SetAPIVersion(oxr.Resource.GetAPIVersion())
@@ -237,22 +278,40 @@ func (f *Function) getXRAndStatus(req *fnv1.RunFunctionRequest) (map[string]inte
 		dxr.Resource.SetName(oxr.Resource.GetName())
 	}
 
-	// First try to get status from desired XR (pipeline changes)
-	if dxr.Resource.GetKind() != "" {
-		err = dxr.Resource.GetValueInto("status", &xrStatus)
-		if err == nil && len(xrStatus) > 0 {
-			return xrStatus, dxr, nil
-		}
-		f.log.Debug("Cannot get status from Desired XR or it's empty")
-	}
-
-	// Fallback to observed XR status
-	err = oxr.Resource.GetValueInto("status", &xrStatus)
-	if err != nil {
+	observed := make(map[string]interface{})
+	if err := oxr.Resource.GetValueInto("status", &observed); err != nil {
 		f.log.Debug("Cannot get status from Observed XR")
+		observed = make(map[string]interface{})
 	}
 
-	return xrStatus, dxr, nil
+	// Desired status (pipeline changes) is overlaid on observed status
+	desired := make(map[string]interface{})
+	if dxr.Resource.GetKind() != "" {
+		if err := dxr.Resource.GetValueInto("status", &desired); err != nil {
+			f.log.Debug("Cannot get status from Desired XR or it's empty")
+			desired = make(map[string]interface{})
+		}
+	}
+
+	return mergeStatus(observed, desired), dxr, nil
+}
+
+// mergeStatus returns observed overlaid with desired; nested maps merge, other desired values win.
+func mergeStatus(observed, desired map[string]interface{}) map[string]interface{} {
+	merged := make(map[string]interface{}, len(observed)+len(desired))
+	for k, v := range observed {
+		merged[k] = v
+	}
+	for k, dv := range desired {
+		dm, dok := dv.(map[string]interface{})
+		om, ook := merged[k].(map[string]interface{})
+		if dok && ook {
+			merged[k] = mergeStatus(om, dm)
+			continue
+		}
+		merged[k] = dv
+	}
+	return merged
 }
 
 // getQueryFromStatus gets query from the XR status
@@ -268,26 +327,23 @@ func (f *Function) getQueryFromStatus(req *fnv1.RunFunctionRequest, in *v1beta1.
 	return nil
 }
 
-// getSubscriptionsFromStatus gets subscriptions from the XR status
-func (f *Function) getSubscriptionsFromStatus(req *fnv1.RunFunctionRequest, in *v1beta1.Input) error {
+// getSubscriptionsFromStatus gets subscriptions from the XR status and reports whether they resolved
+func (f *Function) getSubscriptionsFromStatus(req *fnv1.RunFunctionRequest, in *v1beta1.Input) (bool, error) {
 	xrStatus, _, err := f.getXRAndStatus(req)
 	if err != nil {
-		return err
+		return false, err
 	}
 
-	paved := fieldpath.Pave(xrStatus)
-	value, err := paved.GetValue(strings.TrimPrefix(*in.SubscriptionsRef, "status."))
-	if err == nil && value != nil {
-		if arr, ok := value.([]interface{}); ok {
-			in.Subscriptions = make([]*string, len(arr))
-			for i, sub := range arr {
-				if strSub, ok := sub.(string); ok {
-					in.Subscriptions[i] = to.Ptr(strSub)
-				}
-			}
-		}
+	value, err := fieldpath.Pave(xrStatus).GetValue(strings.TrimPrefix(*in.SubscriptionsRef, "status."))
+	if err != nil {
+		return false, nil //nolint:nilerr // a missing path means unresolved, not a failure
 	}
-	return nil
+	subs, ok := toSubscriptionIDs(value)
+	if !ok {
+		return false, nil
+	}
+	in.Subscriptions = subs
+	return true, nil
 }
 
 // checkStatusTargetHasData checks if the status target has data.
@@ -316,6 +372,12 @@ func (f *Function) executeQuery(ctx context.Context, azureCreds interface{}, in 
 		response.Fatal(rsp, err)
 		f.log.Info("FAILURE: ", "failure", fmt.Sprint(err))
 		return armresourcegraph.ClientResourcesResponse{}, err
+	}
+
+	if isTruncated(results) {
+		err := errors.New("Azure Resource Graph returned truncated results and not all rows were written; paging is not possible when the query uses limit, take or sample, or when all output columns are dynamic or null")
+		response.Warning(rsp, err)
+		f.log.Info("WARNING: ", "truncated", fmt.Sprint(err))
 	}
 
 	// Print the obtained query results
@@ -352,32 +414,49 @@ func (f *Function) processResults(req *fnv1.RunFunctionRequest, in *v1beta1.Inpu
 func getCreds(req *fnv1.RunFunctionRequest) (interface{}, error) {
 	rawCreds := req.GetCredentials()
 
-	if credsData, ok := rawCreds["azure-creds"]; ok {
-		credsData := credsData.GetCredentialData().GetData()
-		if credsJSON, ok := credsData["credentials"]; ok {
-			// Try to parse as array of service principals first
-			var servicePrincipals []map[string]string
-			if err := json.Unmarshal(credsJSON, &servicePrincipals); err == nil && len(servicePrincipals) > 0 {
-				return servicePrincipals, nil
-			}
-
-			// Fallback to single service principal format for backward compatibility
-			var singleCred map[string]string
-			if err := json.Unmarshal(credsJSON, &singleCred); err != nil {
-				return nil, errors.Wrap(err, "cannot parse json credentials")
-			}
-			return singleCred, nil
-		}
-	} else {
+	credsData, ok := rawCreds["azure-creds"]
+	if !ok {
 		return nil, errors.New("failed to get azure-creds credentials")
 	}
 
-	return nil, nil
+	credsJSON, ok := credsData.GetCredentialData().GetData()["credentials"]
+	if !ok {
+		return nil, errors.New("azure-creds credential has no \"credentials\" key")
+	}
+
+	// Try to parse as array of service principals first
+	var servicePrincipals []map[string]string
+	if err := json.Unmarshal(credsJSON, &servicePrincipals); err == nil && len(servicePrincipals) > 0 {
+		return servicePrincipals, nil
+	}
+
+	// Fallback to single service principal format for backward compatibility
+	var singleCred map[string]string
+	if err := json.Unmarshal(credsJSON, &singleCred); err != nil {
+		return nil, errors.Wrap(err, "cannot parse json credentials")
+	}
+	return singleCred, nil
+}
+
+// resourcesClient is the subset of the Azure Resource Graph client used by the function.
+type resourcesClient interface {
+	Resources(ctx context.Context, query armresourcegraph.QueryRequest, options *armresourcegraph.ClientResourcesOptions) (armresourcegraph.ClientResourcesResponse, error)
 }
 
 // AzureQuery is a concrete implementation of the AzureQueryInterface
 // that interacts with Azure Resource Graph API.
-type AzureQuery struct{}
+type AzureQuery struct {
+	// newClient overrides client creation, nil uses armresourcegraph.NewClient.
+	newClient func(cred azcore.TokenCredential) (resourcesClient, error)
+}
+
+// buildClient creates a Resource Graph client for the given credential.
+func (a *AzureQuery) buildClient(cred azcore.TokenCredential) (resourcesClient, error) {
+	if a.newClient != nil {
+		return a.newClient(cred)
+	}
+	return armresourcegraph.NewClient(cred, nil)
+}
 
 // handleSingleServicePrincipal handles the case of a single service principal
 func (a *AzureQuery) handleSingleServicePrincipal(creds map[string]string, log logging.Logger) (map[string]string, []string, bool) {
@@ -452,7 +531,7 @@ func (a *AzureQuery) setupQueryRequest(in *v1beta1.Input, allSubscriptionIDs []s
 func (a *AzureQuery) azQuery(ctx context.Context, azureCreds interface{}, in *v1beta1.Input, log logging.Logger) (results armresourcegraph.ClientResourcesResponse, err error) { //nolint:gocyclo // complexity can not be reduced as it's a result of choosing correct identity and credentials for it
 	var selectedCreds map[string]string
 	var allSubscriptionIDs []string
-	var client *armresourcegraph.Client
+	var client resourcesClient
 	identityType := v1beta1.IdentityTypeAzureServicePrincipalCredentials
 
 	if in.Identity != nil && in.Identity.Type != "" {
@@ -488,20 +567,86 @@ func (a *AzureQuery) azQuery(ctx context.Context, azureCreds interface{}, in *v1
 		if err != nil {
 			return armresourcegraph.ClientResourcesResponse{}, errors.Wrap(err, "failed to initialize workload identity provider")
 		}
+	default:
+		return armresourcegraph.ClientResourcesResponse{}, errors.Errorf("unsupported identity.type %q", identityType)
 	}
 
 	// Setup the query request
 	queryRequest := a.setupQueryRequest(in, allSubscriptionIDs, log)
 
 	// Create the query request, Run the query and get the results.
-	results, err = client.Resources(ctx, queryRequest, nil)
+	return a.queryAllPages(ctx, client, queryRequest, log)
+}
+
+// queryAllPages runs the query and follows SkipToken until all rows are fetched.
+func (a *AzureQuery) queryAllPages(ctx context.Context, client resourcesClient, req armresourcegraph.QueryRequest, log logging.Logger) (armresourcegraph.ClientResourcesResponse, error) {
+	first, err := client.Resources(ctx, req, nil)
 	if err != nil {
 		return armresourcegraph.ClientResourcesResponse{}, errors.Wrap(err, "failed to finish the request")
 	}
-	return results, nil
+
+	rows, ok := first.Data.([]interface{})
+	if !ok {
+		return first, nil
+	}
+
+	all := append([]interface{}{}, rows...)
+	truncated := isTruncated(first)
+	page := first
+	for token := skipToken(page); token != ""; token = skipToken(page) {
+		if req.Options == nil {
+			req.Options = &armresourcegraph.QueryRequestOptions{}
+		}
+		req.Options.SkipToken = to.Ptr(token)
+
+		page, err = client.Resources(ctx, req, nil)
+		if err != nil {
+			return armresourcegraph.ClientResourcesResponse{}, errors.Wrap(err, "failed to finish the request")
+		}
+		pageRows, ok := page.Data.([]interface{})
+		if !ok {
+			log.Info("Non-array page data, stopping pagination")
+			truncated = true
+			break
+		}
+		all = append(all, pageRows...)
+		truncated = truncated || isTruncated(page)
+		if skipToken(page) == token {
+			log.Info("Repeated SkipToken, stopping pagination")
+			truncated = true
+			break
+		}
+	}
+
+	return aggregatePages(first, all, truncated), nil
 }
 
-func (a *AzureQuery) initializeWorkloadIdentityProvider(azureCreds map[string]string, log logging.Logger) (*armresourcegraph.Client, error) {
+// aggregatePages returns the first page response carrying all rows.
+func aggregatePages(first armresourcegraph.ClientResourcesResponse, rows []interface{}, truncated bool) armresourcegraph.ClientResourcesResponse {
+	first.Data = rows
+	first.Count = to.Ptr(int64(len(rows)))
+	first.SkipToken = nil
+	first.ResultTruncated = to.Ptr(armresourcegraph.ResultTruncatedFalse)
+	if truncated {
+		first.ResultTruncated = to.Ptr(armresourcegraph.ResultTruncatedTrue)
+	}
+	return first
+}
+
+// skipToken returns the page SkipToken or an empty string.
+func skipToken(r armresourcegraph.ClientResourcesResponse) string {
+	if r.SkipToken == nil {
+		return ""
+	}
+	return *r.SkipToken
+}
+
+// isTruncated reports whether Azure flagged the page as truncated.
+func isTruncated(r armresourcegraph.ClientResourcesResponse) bool {
+	return r.ResultTruncated != nil && *r.ResultTruncated == armresourcegraph.ResultTruncatedTrue
+}
+
+func (a *AzureQuery) initializeWorkloadIdentityProvider(azureCreds map[string]string, log logging.Logger) (resourcesClient, error) {
 	tokenFilePath := azureCreds[WorkloadIdentityCredentialPath]
 
 	options := &azidentity.WorkloadIdentityCredentialOptions{
@@ -529,7 +674,7 @@ func (a *AzureQuery) initializeWorkloadIdentityProvider(azureCreds map[string]st
 	}
 
 	// Create and authorize a ResourceGraph client
-	client, err := armresourcegraph.NewClient(cred, nil)
+	client, err := a.buildClient(cred)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create client")
 	}
@@ -539,7 +684,7 @@ func (a *AzureQuery) initializeWorkloadIdentityProvider(azureCreds map[string]st
 	return client, nil
 }
 
-func (a *AzureQuery) initializeClientSecretProvider(azureCreds map[string]string, log logging.Logger) (*armresourcegraph.Client, error) {
+func (a *AzureQuery) initializeClientSecretProvider(azureCreds map[string]string, log logging.Logger) (resourcesClient, error) {
 	tenantID := azureCreds[TenantID]
 	clientID := azureCreds[ClientID]
 	clientSecret := azureCreds[ClientSecret]
@@ -552,7 +697,7 @@ func (a *AzureQuery) initializeClientSecretProvider(azureCreds map[string]string
 	}
 
 	// Create and authorize a ResourceGraph client
-	client, err := armresourcegraph.NewClient(cred, nil)
+	client, err := a.buildClient(cred)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create client")
 	}
@@ -722,6 +867,26 @@ func putQueryResultToContext(req *fnv1.RunFunctionRequest, rsp *fnv1.RunFunction
 	return nil
 }
 
+// hasNonMarkerElement reports whether the slice has an element other than the lastQueryTime marker.
+func hasNonMarkerElement(slice []interface{}) bool {
+	for _, el := range slice {
+		if !isLastQueryTimeOnly(el) {
+			return true
+		}
+	}
+	return false
+}
+
+// isLastQueryTimeOnly reports whether v is a map holding only the lastQueryTime marker.
+func isLastQueryTimeOnly(v interface{}) bool {
+	m, ok := v.(map[string]interface{})
+	if !ok || len(m) != 1 {
+		return false
+	}
+	_, ok = m["lastQueryTime"]
+	return ok
+}
+
 // targetHasData checks if a target field already has data
 func targetHasData(data map[string]interface{}, key string) (bool, error) {
 	parts, err := ParseNestedKey(key)
@@ -752,14 +917,14 @@ func targetHasData(data map[string]interface{}, key string) (bool, error) {
 		return false, nil
 	}
 
-	// Check for empty maps
+	// Check for empty maps, a map holding only lastQueryTime has no data
 	if nestedMap, ok := currentValue.(map[string]interface{}); ok {
-		return len(nestedMap) > 0, nil
+		return len(nestedMap) > 0 && !isLastQueryTimeOnly(nestedMap), nil
 	}
 
-	// Check for empty slices
+	// Check for empty slices, ignoring the lastQueryTime marker element
 	if slice, ok := currentValue.([]interface{}); ok {
-		return len(slice) > 0, nil
+		return hasNonMarkerElement(slice), nil
 	}
 
 	// For strings, check if empty
