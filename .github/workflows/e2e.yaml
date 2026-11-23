@@ -1,0 +1,133 @@
+name: End to End Testing
+
+# Managed centrally in upbound/sa-up (gitops/shared-files/functions/workflows) and
+# synced to the function-* repos. Edit it there, not in the individual repos.
+#
+# Runs the repo's end-to-end harness (the up project under e2e/) against a real
+# Spaces control plane. The function is built from the PR head, pushed to a dev
+# tag, and installed as a pinned dependency of the e2e project. Credentials are
+# in-cluster: the function assumes an AWS role through an Upbound proidc
+# web-identity token (no AWS secrets here). See the repo's e2e/README.md.
+#
+# Repos without an e2e/ harness yet pass this check trivially, so the workflow can
+# be rolled out fleet-wide before every repo has tests.
+
+on:
+  # https://securitylab.github.com/resources/github-actions-preventing-pwn-requests/
+  # pull_request_target is potentially dangerous target so we keep it strict
+  # under the label and benefit from secret propagation
+  pull_request_target:
+    types:
+      - synchronize
+      - labeled
+
+env:
+  UP_API_TOKEN: ${{ secrets.UP_E2E_API_TOKEN || secrets.UP_API_TOKEN }}
+  UP_ORG: ${{ secrets.UP_E2E_ORG || secrets.UP_ORG }}
+  UP_GROUP: ${{ secrets.UP_E2E_GROUP || secrets.UP_GROUP || 'default' }}
+  UP_ROBOT_ID: ${{ secrets.UP_E2E_ROBOT_ID || secrets.UP_ROBOT_ID }}
+  # Kept in lockstep with ci.yml / tag.yml and the go.mod floor (bumped manually,
+  # as elsewhere in these shared workflows).
+  GO_VERSION: '1.26.11'
+  # Throwaway e2e artifacts (the built function + the e2e project) are pushed under
+  # the e2e org (UP_ORG) the robot owns -- the e2e robot can't push to the
+  # github.repository (upbound/) namespace.
+  XPKG_REGISTRY: xpkg.upbound.io
+
+jobs:
+  e2e:
+    if: contains(github.event.pull_request.labels.*.name, 'run-e2e-tests')
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        id: checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      # Repos that don't yet have an e2e harness pass without doing anything.
+      - name: Detect e2e harness
+        id: harness
+        run: |
+          if [ -f e2e/upbound.yaml ] && ls e2e/tests/* >/dev/null 2>&1; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "No e2e/ harness in this repo; nothing to run."
+          fi
+
+      - name: Install and login with up
+        if: steps.harness.outputs.present == 'true' && env.UP_API_TOKEN != '' && env.UP_ORG != ''
+        uses: upbound/action-up@53fe6395637d884c80d2bbc8c2d75d0ece776ced # v1
+        with:
+          api-token: ${{ env.UP_API_TOKEN }}
+          organization: ${{ env.UP_ORG }}
+
+      # doesn't work with plain token when pushing otherwise
+      - name: Login to xpkg with robot
+        if: steps.harness.outputs.present == 'true'
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: xpkg.upbound.io
+          username: ${{ env.UP_ROBOT_ID }}
+          password: ${{ env.UP_API_TOKEN }}
+
+      - name: Setup Docker Buildx
+        if: steps.harness.outputs.present == 'true'
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+
+      # Build the function from the PR head so e2e exercises this PR's code.
+      - name: Build function runtime image
+        if: steps.harness.outputs.present == 'true'
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7
+        with:
+          context: .
+          platforms: linux/amd64
+          target: image
+          build-args:
+            GO_VERSION=${{ env.GO_VERSION }}
+          outputs: type=docker,dest=runtime-amd64.tar
+
+      - name: Setup the Crossplane CLI
+        if: steps.harness.outputs.present == 'true'
+        run: curl -sL https://raw.githubusercontent.com/crossplane/crossplane/master/install.sh | sh
+
+      - name: Build and push the function dev package
+        if: steps.harness.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          ./crossplane xpkg build --package-file=function.xpkg \
+            --package-root=package/ --embed-runtime-image-tarball=runtime-amd64.tar
+          REPO="${GITHUB_REPOSITORY##*/}"
+          REPO="${REPO,,}"
+          DEV_VERSION="v0.0.0-e2e.$(git rev-parse --short=12 HEAD)"
+          DEV_PKG="${XPKG_REGISTRY}/${UP_ORG}/${REPO}:${DEV_VERSION}"
+          ./crossplane xpkg push --package-files function.xpkg "${DEV_PKG}"
+          echo "FUNCTION_VERSION=${DEV_VERSION}" >> "$GITHUB_ENV"
+
+      # Replace the @FUNCTION_VERSION@ sentinel in the e2e project's dependsOn with
+      # the dev tag just pushed, so the test configuration installs this PR's build.
+      - name: Pin e2e project to dev package
+        if: steps.harness.outputs.present == 'true'
+        run: |
+          set -euo pipefail
+          sed -i "s|@FUNCTION_VERSION@|${FUNCTION_VERSION}|g" e2e/upbound.yaml
+          grep -n -B2 'version:' e2e/upbound.yaml
+
+      - name: Switch up context
+        if: steps.harness.outputs.present == 'true'
+        run: up ctx ${{ env.UP_ORG }}/upbound-gcp-us-central-1/${{ env.UP_GROUP }}
+
+      # The wrapper project is pushed to a SEPARATE repo from the function: both
+      # the project and the function-under-test would otherwise share the same
+      # source in Crossplane's package lock, which collides ("node already
+      # exists"). The <repo>-e2e-wrapper repo is granted to the e2e robot in
+      # solutions-gitops-prod.
+      - name: Run e2e tests
+        if: steps.harness.outputs.present == 'true'
+        working-directory: e2e
+        run: |
+          REPO="${GITHUB_REPOSITORY##*/}"
+          REPO="${REPO,,}"
+          up test run tests/* --e2e --public \
+            --repository "${XPKG_REGISTRY}/${UP_ORG}/${REPO}-e2e-wrapper"
