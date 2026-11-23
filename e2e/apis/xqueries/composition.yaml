@@ -1,0 +1,33 @@
+# One cheap, read-only Resource Graph query: list the subscriptions the e2e
+# identity can see. It reads no resource and creates nothing. The function signs
+# in with Azure workload identity, exchanging the Upbound OIDC token for an Entra
+# token; any sign-in or query error is fatal, so the XR never goes Ready.
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: xqueries.e2e.azresourcegraph.upbound.io
+spec:
+  compositeTypeRef:
+    apiVersion: e2e.azresourcegraph.upbound.io/v1alpha1
+    kind: XQuery
+  mode: Pipeline
+  pipeline:
+  - step: subscriptions
+    functionRef:
+      name: solutions-function-azresourcegraph
+    input:
+      apiVersion: azresourcegraph.fn.crossplane.io/v1beta1
+      kind: Input
+      identity:
+        type: AzureWorkloadIdentityCredentials
+      query: "resourcecontainers | where type == 'microsoft.resources/subscriptions' | project name, subscriptionId | limit 5"
+      target: status.subscriptions
+    credentials:
+    - name: azure-creds
+      source: Secret
+      secretRef:
+        namespace: crossplane-system
+        name: azure-e2e-identity
+  - step: auto-ready
+    functionRef:
+      name: crossplane-contrib-function-auto-ready

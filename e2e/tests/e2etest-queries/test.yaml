@@ -1,0 +1,57 @@
+# End-to-end test for function-azresourcegraph. `up test run tests/* --e2e` spins
+# up a throwaway Spaces control plane, installs this project (the XRD and
+# Composition in apis/, plus the function under test as a dependency), creates the
+# XR and waits for it to go Ready. A failed sign-in or query makes the function
+# return fatal, the XR never goes Ready, and the test fails.
+apiVersion: meta.dev.upbound.io/v1alpha1
+kind: E2ETest
+metadata:
+  name: e2e-azresourcegraph
+spec:
+  crossplane:
+    autoUpgrade:
+      channel: Rapid
+  defaultConditions:
+    - Ready
+  initResources:
+    # Patch the control plane's default DeploymentRuntimeConfig before the
+    # functions install, so every function pod gets an Upbound OIDC token with
+    # the Entra token-exchange audience, mounted at
+    # /var/run/secrets/upbound.io/provider/token (function pods too). Spaces
+    # policy only allows the audience annotation here.
+    - apiVersion: pkg.crossplane.io/v1beta1
+      kind: DeploymentRuntimeConfig
+      metadata:
+        name: default
+      spec:
+        deploymentTemplate:
+          spec:
+            selector: {}
+            template:
+              metadata:
+                annotations:
+                  proidc.cloud-spaces.upbound.io/audience: api://AzureADTokenExchange
+    # Workload identity settings for the function. Nothing here is secret: the
+    # Entra app and tenant IDs, and the path of the Upbound OIDC token.
+    - apiVersion: v1
+      kind: Secret
+      metadata:
+        name: azure-e2e-identity
+        namespace: crossplane-system
+      type: Opaque
+      stringData:
+        credentials: |
+          {
+            "clientId": "@AZURE_CLIENT_ID@",
+            "tenantId": "b9925bc4-8383-4c37-b9d2-fa456d1bb1c7",
+            "federatedTokenFile": "/var/run/secrets/upbound.io/provider/token"
+          }
+  manifests:
+    - apiVersion: e2e.azresourcegraph.upbound.io/v1alpha1
+      kind: XQuery
+      metadata:
+        name: e2e-query
+        namespace: default
+      spec: {}
+  skipDelete: false
+  timeoutSeconds: 900

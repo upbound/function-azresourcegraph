@@ -1,0 +1,25 @@
+apiVersion: meta.dev.upbound.io/v2alpha1
+kind: Project
+metadata:
+  name: function-azresourcegraph-e2e-wrapper
+spec:
+  # CI rewrites @FUNCTION_VERSION@ to the dev tag it just built and pushed from
+  # the pull request, so the configuration installs that build as a dependency.
+  dependsOn:
+  - apiVersion: pkg.crossplane.io/v1
+    kind: Function
+    package: xpkg.upbound.io/solutions/function-azresourcegraph
+    version: '@FUNCTION_VERSION@'
+  - apiVersion: pkg.crossplane.io/v1
+    kind: Function
+    package: xpkg.upbound.io/crossplane-contrib/function-auto-ready
+    version: '>=v0.0.0'
+  description: |
+    Test configuration that runs function-azresourcegraph in end-to-end tests: an
+    XRD and a Composition that call the function, installed on a throwaway control
+    plane by `up test run tests/* --e2e`. Never published to production.
+  license: Apache-2.0
+  maintainer: Upbound <support@upbound.io>
+  readme: |
+    See e2e/README.md.
+  repository: xpkg.upbound.io/solutions/function-azresourcegraph-e2e-wrapper

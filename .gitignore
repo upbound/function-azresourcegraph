@@ -19,3 +19,7 @@
 
 # Go workspace file
 go.work
+
+# up project build artifacts and generated model cache for the e2e harness
+e2e/_output/
+e2e/.up/
