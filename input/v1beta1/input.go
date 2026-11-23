@@ -58,6 +58,12 @@ type Input struct {
 	// +optional
 	QueryIntervalMinutes *int `json:"queryIntervalMinutes,omitempty"`
 
+	// MaxResults limits the number of rows written to the target.
+	// Default is 1000 (one Azure Resource Graph page); set higher to follow paging.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	MaxResults *int `json:"maxResults,omitempty"`
+
 	// Identity defines the type of identity used for authentication to the Microsoft Graph API.
 	// +optional
 	Identity *Identity `json:"identity,omitempty"`
@@ -78,4 +84,5 @@ const (
 
 // IdentityType controls type of credentials to use for authentication to the Microsoft Graph API.
 // Supported values: AzureServicePrincipalCredentials;AzureWorkloadIdentityCredentials
+// +kubebuilder:validation:Enum=AzureServicePrincipalCredentials;AzureWorkloadIdentityCredentials
 type IdentityType string
