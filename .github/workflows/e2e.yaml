@@ -66,7 +66,7 @@ jobs:
       # doesn't work with plain token when pushing otherwise
       - name: Login to xpkg with robot
         if: steps.harness.outputs.present == 'true'
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
         with:
           registry: xpkg.upbound.io
           username: ${{ env.UP_ROBOT_ID }}
