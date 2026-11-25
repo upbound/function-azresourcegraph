@@ -12,15 +12,20 @@ on:
         description: Package version (e.g. v0.1.0)
         required: false
 
+# Least privilege for GITHUB_TOKEN: nothing here writes to the repository
+# (packages are pushed with the Upbound robot credentials).
+permissions:
+  contents: read
+
 env:
   # Common versions. Go comes from each repo's go.mod (toolchain directive).
   GOLANGCI_VERSION: 'v2.11.4'
   DOCKER_BUILDX_VERSION: 'v0.23.0'
 
-  # These environment variables are important to the Crossplane CLI install.sh
-  # script. They determine what version it installs.
-  XP_CHANNEL: master   # TODO(negz): Pin to stable once v1.14 is released.
-  XP_VERSION: current  # TODO(negz): Pin to a version once v1.14 is released.
+  # Crossplane CLI used to build and push the package: a pinned stable release
+  # (Renovate in upbound/sa-up bumps XP_VERSION).
+  XP_CHANNEL: stable
+  XP_VERSION: v2.5.0
 
   # This CI job will automatically push new builds to xpkg.upbound.io if the
   # XPKG_ACCESS_ID and XPKG_TOKEN secrets are set in the GitHub respository (or
@@ -125,8 +130,16 @@ jobs:
             GO_VERSION=${{ env.GO_VERSION }}
           outputs: type=docker,dest=runtime-${{ matrix.arch }}.tar
 
+      # Pinned release, verified against the checksum published next to it
+      # (XP_VERSION is bumped by Renovate in upbound/sa-up). The runner is
+      # linux/amd64; matrix.arch is only the package's target platform.
       - name: Setup the Crossplane CLI
-        run: "curl -sL https://raw.githubusercontent.com/crossplane/crossplane/master/install.sh | sh"
+        run: |
+          base="https://cli.crossplane.io/${XP_CHANNEL}/${XP_VERSION}/bin/linux_amd64"
+          curl -sSfL "${base}/crossplane" -o crossplane
+          echo "$(curl -sSfL "${base}/crossplane.sha256" | cut -d' ' -f1)  crossplane" | sha256sum -c -
+          chmod +x crossplane
+          ./crossplane version --client
 
       - name: Build Package
         run: ./crossplane xpkg build --package-file=${{ matrix.arch }}.xpkg --package-root=package/ --embed-runtime-image-tarball=runtime-${{ matrix.arch }}.tar
@@ -157,8 +170,16 @@ jobs:
           merge-multiple: true
           pattern: "!*.dockerbuild" # This gets uploaded by docker/build-push-action but must be skipped: https://github.com/actions/toolkit/pull/1874
 
+      # Pinned release, verified against the checksum published next to it
+      # (XP_VERSION is bumped by Renovate in upbound/sa-up). The runner is
+      # linux/amd64; matrix.arch is only the package's target platform.
       - name: Setup the Crossplane CLI
-        run: "curl -sL https://raw.githubusercontent.com/crossplane/crossplane/master/install.sh | sh"
+        run: |
+          base="https://cli.crossplane.io/${XP_CHANNEL}/${XP_VERSION}/bin/linux_amd64"
+          curl -sSfL "${base}/crossplane" -o crossplane
+          echo "$(curl -sSfL "${base}/crossplane.sha256" | cut -d' ' -f1)  crossplane" | sha256sum -c -
+          chmod +x crossplane
+          ./crossplane version --client
 
       - name: Login to Upbound
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4

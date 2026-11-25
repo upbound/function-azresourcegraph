@@ -10,6 +10,10 @@ on:
         description: 'Tag message'
         required: true
 
+# Least privilege for GITHUB_TOKEN: creating the tag is the only write.
+permissions:
+  contents: write
+
 jobs:
   create-tag:
     runs-on: ubuntu-latest

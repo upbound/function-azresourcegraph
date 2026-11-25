@@ -44,6 +44,10 @@ concurrency:
   cancel-in-progress: true
 
 env:
+  # Pinned CLI versions (Renovate in upbound/sa-up bumps them).
+  UP_VERSION: v0.56.0
+  XP_CHANNEL: stable
+  XP_VERSION: v2.5.0
   UP_API_TOKEN: ${{ secrets.UP_E2E_API_TOKEN }}
   UP_ORG: ${{ secrets.UP_E2E_ORG }}
   UP_GROUP: ${{ secrets.UP_E2E_GROUP }}
@@ -119,6 +123,7 @@ jobs:
         if: steps.harness.outputs.present == 'true'
         uses: upbound/action-up@53fe6395637d884c80d2bbc8c2d75d0ece776ced # v1
         with:
+          version: ${{ env.UP_VERSION }}
           api-token: ${{ env.UP_API_TOKEN }}
           organization: ${{ env.UP_ORG }}
 
@@ -147,9 +152,17 @@ jobs:
             GO_VERSION=${{ env.GO_VERSION }}
           outputs: type=docker,dest=runtime-amd64.tar
 
+      # Pinned release, verified against the checksum published next to it
+      # (XP_VERSION is bumped by Renovate in upbound/sa-up). The runner is
+      # linux/amd64; matrix.arch is only the package's target platform.
       - name: Setup the Crossplane CLI
         if: steps.harness.outputs.present == 'true'
-        run: curl -sL https://raw.githubusercontent.com/crossplane/crossplane/master/install.sh | sh
+        run: |
+          base="https://cli.crossplane.io/${XP_CHANNEL}/${XP_VERSION}/bin/linux_amd64"
+          curl -sSfL "${base}/crossplane" -o crossplane
+          echo "$(curl -sSfL "${base}/crossplane.sha256" | cut -d' ' -f1)  crossplane" | sha256sum -c -
+          chmod +x crossplane
+          ./crossplane version --client
 
       - name: Build and push the function dev package
         if: steps.harness.outputs.present == 'true'
