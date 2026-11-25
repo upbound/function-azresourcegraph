@@ -16,6 +16,7 @@
     // Synced from upbound/sa-up (gitops/shared-files). Renovate bumps them there;
     // bumping them here too gets overwritten (and looks like a downgrade) on the next sync.
     '.github/workflows/ci.yml',
+    '.github/workflows/e2e.yaml',
     '.github/workflows/tag.yml',
   ],
   crossplane: {
@@ -34,6 +35,28 @@
       groupName: 'examples',
     },
   ],
+  // Security fixes merge themselves: for a dependency with a published advisory
+  // (OSV data), Renovate opens a PR right away, labels it for e2e, approves it and
+  // merges it once the branch protection's required checks pass (build, lint and
+  // unit-test, plus e2e in repos with an e2e/ harness; solutions-gitops-prod).
+  // Every other update still waits for a human review.
+  osvVulnerabilityAlerts: true,
+  vulnerabilityAlerts: {
+    // One PR for all open advisories in a repo. e2e runs one at a time per repo
+    // (shared control plane name), and GitHub keeps only one waiting run, so
+    // several security PRs at once would cancel each other's e2e. Downside: one
+    // bump that breaks e2e holds back every other fix in that repo. If that
+    // happens, pin or exclude the bad dependency (packageRules) or split the PR.
+    groupName: 'security fixes',
+    labels: [
+      'automated',
+      'security',
+      'run-e2e-tests',
+    ],
+    autoApprove: true,
+    automerge: true,
+    automergeType: 'pr',
+  },
   postUpdateOptions: [
     'gomodTidy',
     'gomodUpdateImportPaths',

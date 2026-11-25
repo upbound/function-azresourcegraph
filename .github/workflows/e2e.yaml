@@ -5,9 +5,15 @@ name: End to End Testing
 #
 # Runs the repo's end-to-end harness (the up project under e2e/) against a real
 # Spaces control plane. The function is built from the PR head, pushed to a dev
-# tag, and installed as a pinned dependency of the e2e project. Credentials are
-# in-cluster: the function assumes an AWS role through an Upbound proidc
-# web-identity token (no AWS secrets here). See the repo's e2e/README.md.
+# tag, and installed as a pinned dependency of the e2e project. Cloud credentials
+# are in-cluster: the function signs in with its pod's Upbound OIDC token (no cloud
+# secrets here). See the repo's e2e/README.md.
+#
+# This job builds and runs code from the pull request with secrets, so it is kept
+# narrow: a read-only GITHUB_TOKEN that is not left in the checkout, only the e2e
+# robot's Upbound credentials (never the deploy robot's), and re-runs on new
+# commits only for branches in this repo. A fork PR needs the label again after
+# every push.
 #
 # Repos without an e2e/ harness yet pass this check trivially, so the workflow can
 # be rolled out fleet-wide before every repo has tests.
@@ -21,11 +27,27 @@ on:
       - synchronize
       - labeled
 
+permissions:
+  contents: read
+
+# One run per pull request: adding run-e2e-tests again, or a new commit on a
+# branch in this repo, replaces an older run of the same PR. Every other event
+# (another label, a push to a fork) gets a group of its own, so it can never
+# cancel a run in progress.
+concurrency:
+  group: >-
+    e2e-pr-${{ github.event.pull_request.number }}-${{
+    (github.event.label.name == 'run-e2e-tests' ||
+     (github.event.action == 'synchronize' &&
+      github.event.pull_request.head.repo.full_name == github.repository))
+    && 'run' || github.run_id }}
+  cancel-in-progress: true
+
 env:
-  UP_API_TOKEN: ${{ secrets.UP_E2E_API_TOKEN || secrets.UP_API_TOKEN }}
-  UP_ORG: ${{ secrets.UP_E2E_ORG || secrets.UP_ORG }}
-  UP_GROUP: ${{ secrets.UP_E2E_GROUP || secrets.UP_GROUP || 'default' }}
-  UP_ROBOT_ID: ${{ secrets.UP_E2E_ROBOT_ID || secrets.UP_ROBOT_ID }}
+  UP_API_TOKEN: ${{ secrets.UP_E2E_API_TOKEN }}
+  UP_ORG: ${{ secrets.UP_E2E_ORG }}
+  UP_GROUP: ${{ secrets.UP_E2E_GROUP }}
+  UP_ROBOT_ID: ${{ secrets.UP_E2E_ROBOT_ID }}
   # Kept in lockstep with ci.yml / tag.yml and the go.mod floor (bumped manually,
   # as elsewhere in these shared workflows).
   GO_VERSION: '1.26.11'
@@ -36,7 +58,19 @@ env:
 
 jobs:
   e2e:
-    if: contains(github.event.pull_request.labels.*.name, 'run-e2e-tests')
+    # Not "e2e": branch protection requires the "e2e" commit status that the
+    # report job below posts, not this job's check.
+    name: e2e-run
+    if: >-
+      contains(github.event.pull_request.labels.*.name, 'run-e2e-tests') &&
+      (github.event.label.name == 'run-e2e-tests' ||
+       (github.event.action == 'synchronize' &&
+        github.event.pull_request.head.repo.full_name == github.repository))
+    # up test names the control plane <project>-uptest-<test>, so every run in this
+    # repo uses the same one: run them one at a time.
+    concurrency:
+      group: e2e-control-plane
+      cancel-in-progress: false
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -44,6 +78,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
 
       # Repos that don't yet have an e2e harness pass without doing anything.
       - name: Detect e2e harness
@@ -56,8 +91,20 @@ jobs:
             echo "No e2e/ harness in this repo; nothing to run."
           fi
 
+      - name: Require e2e credentials
+        if: steps.harness.outputs.present == 'true'
+        run: |
+          missing=""
+          for v in UP_API_TOKEN UP_ORG UP_GROUP UP_ROBOT_ID; do
+            [ -n "${!v}" ] || missing="$missing UP_E2E_${v#UP_}"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing e2e secrets:$missing (managed in solutions-gitops-prod)"
+            exit 1
+          fi
+
       - name: Install and login with up
-        if: steps.harness.outputs.present == 'true' && env.UP_API_TOKEN != '' && env.UP_ORG != ''
+        if: steps.harness.outputs.present == 'true'
         uses: upbound/action-up@53fe6395637d884c80d2bbc8c2d75d0ece776ced # v1
         with:
           api-token: ${{ env.UP_API_TOKEN }}
@@ -115,19 +162,105 @@ jobs:
           grep -n -B2 'version:' e2e/upbound.yaml
 
       - name: Switch up context
+        id: ctx
         if: steps.harness.outputs.present == 'true'
         run: up ctx ${{ env.UP_ORG }}/upbound-gcp-us-central-1/${{ env.UP_GROUP }}
+
+      # up test names its control plane <project>-uptest-<test>. Runs are serialized
+      # per repo, so one that exists now was left behind by a cancelled run and
+      # would collide with this one: delete it and wait until it is gone. Fails
+      # the run if the control planes can't be listed.
+      - name: Delete leftover e2e control planes
+        if: steps.harness.outputs.present == 'true' && steps.ctx.outcome == 'success'
+        working-directory: e2e
+        env:
+          CLEANUP: before
+        run: &delete-control-planes |
+          # One script for both cleanup steps (YAML anchor). up ctp list ignores
+          # --group and lists the group of the current up context, which the
+          # "Switch up context" step set to UP_GROUP.
+          set -euo pipefail
+          strict=true
+          [ "${CLEANUP}" = after ] && strict=false
+          fail() {
+            if ${strict}; then echo "::error::$*"; exit 1; fi
+            echo "::warning::$*"; exit 0
+          }
+          PROJECT=$(awk '/^metadata:/{m=1; next} m && /^  name:/{print $2; exit}' upbound.yaml)
+          [ -n "${PROJECT}" ] || fail "no metadata.name in upbound.yaml"
+          stale() {
+            local out
+            out=$(up ctp list --format json) || return 1
+            # An empty group prints this text instead of JSON.
+            [ "${out}" = "No control planes found" ] && return 0
+            jq -r --arg p "${PROJECT}-uptest-" '.[].metadata.name | select(startswith($p))' <<<"${out}"
+          }
+          names=$(stale) || fail "cannot list control planes"
+          for c in ${names}; do
+            echo "Deleting control plane ${c}"
+            up ctp delete "${c}" || echo "::warning::cannot delete ${c}"
+          done
+          ${strict} || exit 0
+          # Before a run: wait until they are gone, or up test would collide.
+          for _ in $(seq 1 60); do
+            names=$(stale) || fail "cannot list control planes"
+            [ -z "${names}" ] && exit 0
+            sleep 10
+          done
+          fail "control planes still being deleted: ${names//$'\n'/ }"
 
       # The wrapper project is pushed to a SEPARATE repo from the function: both
       # the project and the function-under-test would otherwise share the same
       # source in Crossplane's package lock, which collides ("node already
       # exists"). The <repo>-e2e-wrapper repo is granted to the e2e robot in
       # solutions-gitops-prod.
+      #
+      # TMPDIR=e2e/.tmp: up test copies each test manifest into a new directory
+      # directly under $TMPDIR, and uptest resolves hook annotations
+      # (uptest.upbound.io/pre-assert-hook etc.) relative to that copy. With
+      # TMPDIR here, a hook path like ../../tests/<test>/hook.sh points at the
+      # script in the repo.
       - name: Run e2e tests
         if: steps.harness.outputs.present == 'true'
         working-directory: e2e
         run: |
           REPO="${GITHUB_REPOSITORY##*/}"
           REPO="${REPO,,}"
-          up test run tests/* --e2e --public \
+          mkdir -p .tmp
+          TMPDIR="$PWD/.tmp" up test run tests/* --e2e --public \
             --repository "${XPKG_REGISTRY}/${UP_ORG}/${REPO}-e2e-wrapper"
+
+      # Also after a failed or cancelled run, so nothing is left behind. Best
+      # effort: a cleanup problem only warns here.
+      - name: Delete e2e control planes
+        if: always() && steps.ctx.outcome == 'success'
+        working-directory: e2e
+        env:
+          CLEANUP: after
+        run: *delete-control-planes
+
+  # Branch protection requires the "e2e" commit status, not a job check. GitHub
+  # reports a skipped job as success, and every event that doesn't start a run
+  # (another label, a push to a fork) skips the e2e job. Only a run that actually
+  # finished posts "e2e", so a skipped run can't turn a failed e2e green, and a
+  # new commit has no "e2e" until a run passes on it. This job runs no code from
+  # the pull request, so it is the only one that can write statuses.
+  report:
+    name: e2e-report
+    needs: e2e
+    if: always() && (needs.e2e.result == 'success' || needs.e2e.result == 'failure')
+    permissions:
+      statuses: write
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Post the e2e commit status
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULT: ${{ needs.e2e.result }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/statuses/${SHA}" \
+            -f state="${RESULT}" \
+            -f context=e2e \
+            -f description="End to End Testing: ${RESULT}" \
+            -f target_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
