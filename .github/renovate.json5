@@ -26,6 +26,30 @@
   },
   packageRules: [
     {
+      // Normal Go module updates wait 3 days after release, so a compromised
+      // version is more likely to be caught upstream before Renovate proposes
+      // it. Security fixes are not delayed (vulnerabilityAlerts sets no
+      // minimumReleaseAge). Scoped to Go modules: the Go proxy publishes
+      // release dates, and updates without one would be held back forever.
+      matchDatasources: [
+        'go',
+      ],
+      minimumReleaseAge: '3 days',
+    },
+    {
+      // Pin Dockerfile images by digest (base image, dockerfile syntax), so a
+      // build always uses the exact image Renovate proposed; digest updates come
+      // as PRs. Not golang: CI sets its tag from go.mod's toolchain, the ARG
+      // default only matters for local builds. Not example/ package refs.
+      matchManagers: [
+        'dockerfile',
+      ],
+      matchPackageNames: [
+        '!golang',
+      ],
+      pinDigests: true,
+    },
+    {
       matchManagers: [
         'crossplane',
       ],
