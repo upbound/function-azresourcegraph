@@ -13,8 +13,7 @@ on:
         required: false
 
 env:
-  # Common versions
-  GO_VERSION: '1.26.11'
+  # Common versions. Go comes from each repo's go.mod (toolchain directive).
   GOLANGCI_VERSION: 'v2.11.4'
   DOCKER_BUILDX_VERSION: 'v0.23.0'
 
@@ -45,7 +44,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
           cache: false  # The golangci-lint action does its own caching.
 
       - name: Check go mod tidy
@@ -65,7 +64,7 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
-          go-version: ${{ env.GO_VERSION }}
+          go-version-file: go.mod
 
       - name: Run Unit Tests
         run: go test -v -cover ./...
@@ -96,6 +95,20 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # The image is built with the Go toolchain pinned in the repo's go.mod
+      # (`toolchain goX.Y.Z`), which Renovate bumps (security fixes merge
+      # themselves after e2e). No fallback to the `go` directive: that is only
+      # the minimum language version and would silently build with an old Go.
+      - name: Read Go toolchain from go.mod
+        run: |
+          v=$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)
+          if [ -z "$v" ]; then
+            echo "::error file=go.mod::go.mod needs a toolchain directive (e.g. 'toolchain go1.26.11'): the function image is built with that Go version. Keep the go directive lower (the minimum language version); go mod tidy drops a toolchain line equal to it."
+            exit 1
+          fi
+          echo "Building with Go $v"
+          echo "GO_VERSION=$v" >> "$GITHUB_ENV"
 
       # We ask Docker to use GitHub Action's native caching support to speed up
       # the build, per https://docs.docker.com/build/cache/backends/gha/.
