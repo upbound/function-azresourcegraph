@@ -2,7 +2,7 @@ module github.com/upbound/function-azresourcegraph
 
 go 1.26.10
 
-toolchain go1.26.11
+toolchain go1.27.4
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.24.0
