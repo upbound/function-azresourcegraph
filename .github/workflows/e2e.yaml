@@ -48,9 +48,6 @@ env:
   UP_ORG: ${{ secrets.UP_E2E_ORG }}
   UP_GROUP: ${{ secrets.UP_E2E_GROUP }}
   UP_ROBOT_ID: ${{ secrets.UP_E2E_ROBOT_ID }}
-  # Kept in lockstep with ci.yml / tag.yml and the go.mod floor (bumped manually,
-  # as elsewhere in these shared workflows).
-  GO_VERSION: '1.26.11'
   # Throwaway e2e artifacts (the built function + the e2e project) are pushed under
   # the e2e org (UP_ORG) the robot owns -- the e2e robot can't push to the
   # github.repository (upbound/) namespace.
@@ -90,6 +87,21 @@ jobs:
             echo "present=false" >> "$GITHUB_OUTPUT"
             echo "No e2e/ harness in this repo; nothing to run."
           fi
+
+      # The image is built with the Go toolchain pinned in the repo's go.mod
+      # (`toolchain goX.Y.Z`), which Renovate bumps (security fixes merge
+      # themselves after e2e). No fallback to the `go` directive: that is only
+      # the minimum language version and would silently build with an old Go.
+      - name: Read Go toolchain from go.mod
+        if: steps.harness.outputs.present == 'true'
+        run: |
+          v=$(awk '$1 == "toolchain" { sub(/^go/, "", $2); print $2 }' go.mod)
+          if [ -z "$v" ]; then
+            echo "::error file=go.mod::go.mod needs a toolchain directive (e.g. 'toolchain go1.26.11'): the function image is built with that Go version. Keep the go directive lower (the minimum language version); go mod tidy drops a toolchain line equal to it."
+            exit 1
+          fi
+          echo "Building with Go $v"
+          echo "GO_VERSION=$v" >> "$GITHUB_ENV"
 
       - name: Require e2e credentials
         if: steps.harness.outputs.present == 'true'
