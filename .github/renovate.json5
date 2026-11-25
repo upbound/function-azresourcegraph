@@ -40,6 +40,9 @@
   // merges it once the branch protection's required checks pass (build, lint and
   // unit-test, plus e2e in repos with an e2e/ harness; solutions-gitops-prod).
   // Every other update still waits for a human review.
+  // Go itself counts: the build toolchain is the `toolchain` line in go.mod (the
+  // shared CI and e2e workflows build with it), so a Go patch release with an
+  // advisory lands in this PR too.
   osvVulnerabilityAlerts: true,
   vulnerabilityAlerts: {
     // One PR for all open advisories in a repo. e2e runs one at a time per repo
